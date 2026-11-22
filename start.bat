@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-set EXE=bin\Release\net10.0-windows\SideScreenHUD.exe
+set EXE=bin\Release\net10.0-windows10.0.22621.0\SideScreenHUD.exe
 if not exist "%EXE%" (
   echo [SideScreen HUD] 首次运行正在编译 Release 版本...
   dotnet build -c Release

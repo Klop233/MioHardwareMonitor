@@ -5,6 +5,7 @@ namespace SideScreenHUD.Native;
 internal static class Win32Interop
 {
     public const int WM_SIZE = 0x0005;
+    public const int WM_ACTIVATEAPP = 0x001C;
     public const int WM_WINDOWPOSCHANGING = 0x0046;
     public const int WM_NCLBUTTONDOWN = 0x00A1;
     public const int WM_SYSCOMMAND = 0x0112;
@@ -16,7 +17,18 @@ internal static class Win32Interop
 
     public const int SC_SIZE = 0xF000;
     public const int SC_MOVE = 0xF010;
+    public const int SC_MINIMIZE = 0xF020;
     public const int SC_MAXIMIZE = 0xF030;
+
+    public const int GWL_EXSTYLE = -20;
+    public const long WS_EX_TOPMOST = 0x00000008L;
+    public const long WS_EX_TOOLWINDOW = 0x00000080L;
+    public const long WS_EX_APPWINDOW = 0x00040000L;
+    public const long WS_EX_NOACTIVATE = 0x08000000L;
+
+    public const int SW_SHOWNOACTIVATE = 4;
+    public const uint GW_HWNDPREV = 3;
+    public const uint PW_RENDERFULLCONTENT = 0x00000002;
 
     public const uint SWP_NOSIZE = 0x0001;
     public const uint SWP_NOMOVE = 0x0002;
@@ -183,6 +195,94 @@ internal static class Win32Interop
 
     [DllImport("user32.dll")]
     public static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+
+    [DllImport("user32.dll")]
+    public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
+    private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLong", SetLastError = true)]
+    private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool CloseHandle(IntPtr hObject);
+
+    public static long GetWindowExStyle(IntPtr hwnd) =>
+        IntPtr.Size == 8 ? GetWindowLongPtr64(hwnd, GWL_EXSTYLE).ToInt64() : GetWindowLong32(hwnd, GWL_EXSTYLE);
+
+    public static void SetWindowExStyle(IntPtr hwnd, long exStyle)
+    {
+        if (IntPtr.Size == 8)
+            SetWindowLongPtr64(hwnd, GWL_EXSTYLE, new IntPtr(exStyle));
+        else
+            SetWindowLong32(hwnd, GWL_EXSTYLE, (int)exStyle);
+    }
+
+    /// <summary>
+    /// Applies WS_EX_TOOLWINDOW so Windows displays the window across ALL Virtual Desktops
+    /// (Win+Ctrl+Left/Right) and protects it from Win+D Show Desktop minimization.
+    /// </summary>
+    public static void ApplyVirtualDesktopPinStyle(IntPtr hwnd, bool pinAcrossDesktops, bool showInTaskbar, bool noActivate = false)
+    {
+        if (hwnd == IntPtr.Zero) return;
+        long ex = GetWindowExStyle(hwnd);
+        if (pinAcrossDesktops)
+        {
+            ex |= WS_EX_TOOLWINDOW;
+            ex &= ~WS_EX_APPWINDOW;
+        }
+        else
+        {
+            ex &= ~WS_EX_TOOLWINDOW;
+            if (showInTaskbar) ex |= WS_EX_APPWINDOW;
+            else ex &= ~WS_EX_APPWINDOW;
+        }
+
+        if (noActivate) ex |= WS_EX_NOACTIVATE;
+        else ex &= ~WS_EX_NOACTIVATE;
+
+        SetWindowExStyle(hwnd, ex);
+        SetWindowPos(hwnd, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+
+    public static bool IsCoveredByDesktopShellOrDemoted(IntPtr hwnd)
+    {
+        if (hwnd == IntPtr.Zero) return false;
+        if ((GetWindowExStyle(hwnd) & WS_EX_TOPMOST) == 0) return true;
+
+        var sb = new System.Text.StringBuilder(64);
+        IntPtr prev = GetWindow(hwnd, GW_HWNDPREV);
+        int steps = 0;
+        while (prev != IntPtr.Zero && steps < 40)
+        {
+            sb.Clear();
+            if (GetClassName(prev, sb, sb.Capacity) > 0)
+            {
+                string cls = sb.ToString();
+                if (cls == "WorkerW" || cls == "Progman")
+                    return true;
+            }
+            prev = GetWindow(prev, GW_HWNDPREV);
+            steps++;
+        }
+        return false;
+    }
 
     [DllImport("shcore.dll")]
     public static extern int GetDpiForMonitor(IntPtr hmonitor, int dpiType, out uint dpiX, out uint dpiY);

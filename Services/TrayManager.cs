@@ -168,13 +168,19 @@ public sealed class TrayManager : IDisposable
         // 2. Display Mode & Fixed Position
         var modeMenu = new ToolStripMenuItem("显示模式与固定位置");
 
-        var fsItem = new ToolStripMenuItem("占用整块屏幕 (F11)") { Checked = s.IsFullScreen };
-        fsItem.Click += (_, _) => _controller.SetFullScreen(true);
+        var directItem = new ToolStripMenuItem("硬件独占显示器（脱离桌面 · Direct Display）") { Checked = s.UseDirectDisplayExclusive };
+        directItem.Click += (_, _) => _controller.SetDisplayMode(useDirectExclusive: true, isFullScreen: true);
+        modeMenu.DropDownItems.Add(directItem);
+
+        var fsItem = new ToolStripMenuItem("占用整块屏幕 (F11)") { Checked = !s.UseDirectDisplayExclusive && s.IsFullScreen };
+        fsItem.Click += (_, _) => _controller.SetDisplayMode(useDirectExclusive: false, isFullScreen: true);
         modeMenu.DropDownItems.Add(fsItem);
 
-        var fixedItem = new ToolStripMenuItem("窗口固定显示位置") { Checked = !s.IsFullScreen };
-        fixedItem.Click += (_, _) => _controller.SetFullScreen(false);
+        var fixedItem = new ToolStripMenuItem("窗口固定显示位置") { Checked = !s.UseDirectDisplayExclusive && !s.IsFullScreen };
+        fixedItem.Click += (_, _) => _controller.SetDisplayMode(useDirectExclusive: false, isFullScreen: false);
         modeMenu.DropDownItems.Add(fixedItem);
+
+        modeMenu.DropDownItems.Add("打开 Windows「从桌面删除显示器」设置", null, (_, _) => AppController.OpenWindowsSpecializedDisplaySettings());
 
         modeMenu.DropDownItems.Add(new ToolStripSeparator());
 
@@ -243,6 +249,10 @@ public sealed class TrayManager : IDisposable
         var topItem = new ToolStripMenuItem("监控窗口置顶") { Checked = s.AlwaysOnTop };
         topItem.Click += (_, _) => _controller.SetAlwaysOnTop(!s.AlwaysOnTop);
         _menu.Items.Add(topItem);
+
+        var pinItem = new ToolStripMenuItem("跨虚拟桌面常驻（切桌面不消失）") { Checked = s.PinToAllVirtualDesktops };
+        pinItem.Click += (_, _) => _controller.SetPinToAllVirtualDesktops(!s.PinToAllVirtualDesktops);
+        _menu.Items.Add(pinItem);
 
         var lockItem = new ToolStripMenuItem("锁定窗口位置与大小") { Checked = s.LockWindowPosition };
         lockItem.Click += (_, _) => _controller.SetLockWindowPosition(!s.LockWindowPosition);

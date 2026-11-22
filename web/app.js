@@ -252,7 +252,10 @@ function handleWindowState(data) {
   const badge = document.getElementById('window-mode-badge');
   if (badge) {
     badge.className = 'status-pill';
-    if (state.isFullScreen) {
+    if (data.isDirectExclusive) {
+      badge.textContent = '硬件独占';
+      badge.classList.add('success');
+    } else if (state.isFullScreen) {
       badge.textContent = '占用整屏';
       badge.classList.add('info');
     } else if (state.lockWindowPosition) {

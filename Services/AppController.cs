@@ -58,6 +58,9 @@ public sealed class AppController : IDisposable
     public AppSettings Settings => _settingsService.Current;
     public DisplayManager DisplayManager => _displayManager;
     public bool IsDisplayOpen => _displayWindow != null;
+    public bool IsDirectDisplayActive => _displayWindow?.IsDirectDisplayExclusive == true;
+    public DirectDisplayTargetDescriptor? ActiveDirectDisplayTarget => _displayWindow?.DirectDisplayTarget;
+    public string DirectDisplayErrorMessage { get; private set; } = "";
     public bool IsElevated => _lastTelemetry?.IsElevated ?? false;
     public MonitorDescriptor? CurrentDisplayMonitor => _displayWindow?.CurrentMonitor;
     public MonitorDescriptor? TargetMonitor => _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
@@ -137,7 +140,7 @@ public sealed class AppController : IDisposable
         {
             if (_controlWindow == null || !_controlWindow.IsVisible) return;
             bool needTopMost = false;
-            if (_displayWindow != null && Settings.AlwaysOnTop)
+            if (_displayWindow != null && !_displayWindow.IsDirectDisplayExclusive && Settings.AlwaysOnTop)
             {
                 var ctrlHwnd = new WindowInteropHelper(_controlWindow).Handle;
                 var ctrlMon = ctrlHwnd != IntPtr.Zero ? _displayManager.GetMonitorForWindow(ctrlHwnd) : null;
@@ -178,15 +181,10 @@ public sealed class AppController : IDisposable
         {
             if (!string.IsNullOrWhiteSpace(overrideDeviceName))
             {
+                Settings.UseDirectDisplayExclusive = false;
                 Settings.TargetMonitorDevice = overrideDeviceName;
                 _settingsService.Save();
             }
-
-            var target = _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
-            if (target == null) return;
-
-            Settings.TargetMonitorDevice = target.DeviceName;
-            _settingsService.Save();
 
             bool hadExisting = false;
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
@@ -195,11 +193,83 @@ public sealed class AppController : IDisposable
                 DestroyDisplayWindowInternal();
             });
 
-            // Brief pause ensures old WebView2 controller & HWND fully release cross-GPU resources
+            // Brief pause ensures old WebView2 controller, HWND, or DirectDisplay target fully releases resources
             if (hadExisting)
             {
-                await Task.Delay(120);
+                await Task.Delay(160);
             }
+
+            if (Settings.UseDirectDisplayExclusive)
+            {
+                DirectDisplaySession? directSession = null;
+                string directErr = "";
+                bool acquired = await Task.Run(() =>
+                    DirectDisplayService.TryStartSession(Settings.DirectDisplayTargetId, out directSession, out directErr));
+
+                if (!acquired || directSession == null)
+                {
+                    DirectDisplayErrorMessage = string.IsNullOrWhiteSpace(directErr)
+                        ? "无法硬件独占目标显示器，请确认已在 Windows 设置中开启「从桌面删除显示器」。"
+                        : directErr;
+                    RefreshTrayMenu();
+                    NotifyStateChanged();
+                    return;
+                }
+
+                DirectDisplayErrorMessage = "";
+                Settings.DirectDisplayTargetId = directSession.Descriptor.TargetKey;
+                _settingsService.Save();
+
+                directSession.SessionInvalidated += reason =>
+                {
+                    DirectDisplayErrorMessage = reason;
+                    CloseDisplayWindow();
+                };
+
+                var fallbackMon = _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true)
+                                  ?? new MonitorDescriptor
+                                  {
+                                      DeviceName = directSession.Descriptor.TargetKey,
+                                      FriendlyName = directSession.Descriptor.FriendlyName,
+                                      Width = directSession.Width,
+                                      Height = directSession.Height,
+                                      WorkWidth = directSession.Width,
+                                      WorkHeight = directSession.Height,
+                                      RefreshRateHz = directSession.RefreshRateHz
+                                  };
+
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
+                {
+                    if (_disposed)
+                    {
+                        directSession.Dispose();
+                        return;
+                    }
+                    var win = new DisplayWindow(this, fallbackMon, directSession);
+                    win.Closed += (_, _) =>
+                    {
+                        if (ReferenceEquals(_displayWindow, win))
+                        {
+                            _displayWindow = null;
+                            RefreshTrayMenu();
+                            NotifyStateChanged();
+                        }
+                    };
+                    _displayWindow = win;
+                    win.Show();
+                    SyncControlWindowTopMost();
+                    RefreshTrayMenu();
+                    NotifyStateChanged();
+                });
+                return;
+            }
+
+            DirectDisplayErrorMessage = "";
+            var target = _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
+            if (target == null) return;
+
+            Settings.TargetMonitorDevice = target.DeviceName;
+            _settingsService.Save();
 
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
@@ -246,24 +316,21 @@ public sealed class AppController : IDisposable
         _ = RecreateDisplayWindowAsync(deviceName);
     }
 
-    public void SetFullScreen(bool isFullScreen)
+    public void SetDisplayMode(bool useDirectExclusive, bool isFullScreen)
     {
-        Settings.IsFullScreen = isFullScreen;
+        bool modeTypeChanged = Settings.UseDirectDisplayExclusive != useDirectExclusive;
+        Settings.UseDirectDisplayExclusive = useDirectExclusive;
+        Settings.IsFullScreen = useDirectExclusive || isFullScreen;
+        DirectDisplayErrorMessage = "";
         _settingsService.Save();
 
-        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        if (modeTypeChanged || useDirectExclusive)
         {
-            _displayWindow?.ApplyDisplayModeAndGeometry();
-            SyncControlWindowTopMost();
+            _ = RecreateDisplayWindowAsync();
             RefreshTrayMenu();
             NotifyStateChanged();
-        });
-    }
-
-    public void ToggleFullScreen()
-    {
-        Settings.IsFullScreen = !Settings.IsFullScreen;
-        _settingsService.Save();
+            return;
+        }
 
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
@@ -279,6 +346,72 @@ public sealed class AppController : IDisposable
             RefreshTrayMenu();
             NotifyStateChanged();
         });
+    }
+
+    public void SetDirectDisplayTarget(string targetKey)
+    {
+        if (string.IsNullOrWhiteSpace(targetKey)) return;
+        Settings.DirectDisplayTargetId = targetKey;
+        DirectDisplayErrorMessage = "";
+        _settingsService.Save();
+
+        if (Settings.UseDirectDisplayExclusive)
+        {
+            _ = RecreateDisplayWindowAsync();
+        }
+        NotifyStateChanged();
+    }
+
+    public void SetDirectDisplayFps(int fps)
+    {
+        Settings.DirectDisplayFps = Math.Clamp(fps, 2, 30);
+        _settingsService.Save();
+        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            _displayWindow?.UpdateDirectDisplayFps(Settings.DirectDisplayFps);
+        });
+        NotifyStateChanged();
+    }
+
+    public void SetPinToAllVirtualDesktops(bool pinAllDesktops)
+    {
+        Settings.PinToAllVirtualDesktops = pinAllDesktops;
+        _settingsService.Save();
+
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            _displayWindow?.ApplyPinToAllVirtualDesktops(pinAllDesktops);
+            RefreshTrayMenu();
+            NotifyStateChanged();
+        });
+    }
+
+    public static void OpenWindowsSpecializedDisplaySettings()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "ms-settings:display-advanced",
+                UseShellExecute = true
+            });
+        }
+        catch { }
+    }
+
+    public void SetFullScreen(bool isFullScreen)
+    {
+        SetDisplayMode(useDirectExclusive: false, isFullScreen: isFullScreen);
+    }
+
+    public void ToggleFullScreen()
+    {
+        if (Settings.UseDirectDisplayExclusive)
+        {
+            SetDisplayMode(useDirectExclusive: false, isFullScreen: false);
+            return;
+        }
+        SetDisplayMode(useDirectExclusive: false, isFullScreen: !Settings.IsFullScreen);
     }
 
     public void SetWindowPositionPreset(string preset)

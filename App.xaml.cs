@@ -43,6 +43,7 @@ public partial class App : System.Windows.Application
         var outPath = Path.Combine(AppContext.BaseDirectory, "self-test-report.json");
         var dm = new DisplayManager();
         var monitors = dm.GetMonitors();
+        var directTargets = DirectDisplayService.EnumerateTargets();
 
         using var hw = new HardwareMonitorService();
         hw.Collect();
@@ -71,6 +72,7 @@ public partial class App : System.Windows.Application
         var report = new
         {
             monitors,
+            directTargets,
             telemetry,
             networkIp = ipSnap,
             updateCheck = updateSnap,

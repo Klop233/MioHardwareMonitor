@@ -498,13 +498,14 @@
                                            Margin="0,0,0,14" />
 
                                 <TextBlock Text="显示模式" Style="{StaticResource FieldLabel}" />
-                                <StackPanel Margin="0,0,0,14">
-                                    <RadioButton x:Name="RadioFullScreen" Content="占用整块屏幕（无边框全屏）" GroupName="DispMode" Style="{StaticResource SpecRadio}" Margin="0,0,0,4" Checked="RadioMode_Changed" />
-                                    <RadioButton x:Name="RadioWindowed" Content="窗口固定显示位置（右侧配置坐标）" GroupName="DispMode" Style="{StaticResource SpecRadio}" Checked="RadioMode_Changed" />
+                                <StackPanel Margin="0,0,0,12">
+                                    <RadioButton x:Name="RadioFullScreen" Content="占用整块屏幕（桌面无边框全屏）" GroupName="DispMode" Style="{StaticResource SpecRadio}" Margin="0,0,0,2" Checked="RadioMode_Changed" />
+                                    <RadioButton x:Name="RadioWindowed" Content="窗口固定显示位置（右侧配置坐标）" GroupName="DispMode" Style="{StaticResource SpecRadio}" Margin="0,0,0,2" Checked="RadioMode_Changed" />
+                                    <RadioButton x:Name="RadioDirectExclusive" Content="硬件独占显示器（脱离桌面 · Direct Display）" GroupName="DispMode" Style="{StaticResource SpecRadio}" Checked="RadioMode_Changed" />
                                 </StackPanel>
 
                                 <TextBlock Text="跨显卡渲染模式" Style="{StaticResource FieldLabel}" />
-                                <ComboBox x:Name="ComboRenderMode" Style="{StaticResource SpecCombo}" Margin="0,0,0,14" SelectionChanged="ComboRenderMode_SelectionChanged">
+                                <ComboBox x:Name="ComboRenderMode" Style="{StaticResource SpecCombo}" Margin="0,0,0,12" SelectionChanged="ComboRenderMode_SelectionChanged">
                                     <ComboBoxItem Tag="safe" Content="跨显卡安全模式（推荐 · 防双显卡黑屏）" />
                                     <ComboBoxItem Tag="nodcomp" Content="禁用 DirectComposition 模式" />
                                     <ComboBoxItem Tag="gpu" Content="原生 GPU 硬件加速（同显卡双屏）" />
@@ -512,13 +513,65 @@
 
                                 <TextBlock Text="窗口展示行为" Style="{StaticResource FieldLabel}" />
                                 <CheckBox x:Name="ChkTopMost" Content="监控窗口置顶（默认开启）" Style="{StaticResource SpecCheck}" Checked="ChkTopMost_Changed" Unchecked="ChkTopMost_Changed" />
+                                <CheckBox x:Name="ChkPinAllDesktops" Content="跨虚拟桌面常驻与防 Win+D 隐藏（切桌面不消失）" Style="{StaticResource SpecCheck}" Checked="ChkPinAllDesktops_Changed" Unchecked="ChkPinAllDesktops_Changed" />
                                 <CheckBox x:Name="ChkHideTopBar" Content="隐藏监控窗口顶栏（纯数据展示）" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
-                                <CheckBox x:Name="ChkShowInTaskbar" Content="在任务栏显示监控窗口" Style="{StaticResource SpecCheck}" Checked="ChkShowInTaskbar_Changed" Unchecked="ChkShowInTaskbar_Changed" />
+                                <CheckBox x:Name="ChkShowInTaskbar" Content="在任务栏显示监控窗口（需关闭跨桌面常驻）" Style="{StaticResource SpecCheck}" Checked="ChkShowInTaskbar_Changed" Unchecked="ChkShowInTaskbar_Changed" />
                             </StackPanel>
                         </Border>
 
-                        <!-- Right Card: Fixed Position Presets, Coordinates & Lock -->
-                        <Border Grid.Column="2" x:Name="FixedWindowPanel" Style="{StaticResource SectionCard}" VerticalAlignment="Top">
+                        <!-- Right Column: Fixed Position Panel OR Hardware Direct Display Panel -->
+                        <Grid Grid.Column="2" VerticalAlignment="Top">
+                            <!-- A. Hardware Exclusive Direct Display Panel (Visible when RadioDirectExclusive is selected) -->
+                            <Border x:Name="DirectDisplayPanel" Style="{StaticResource SectionCard}" Visibility="Collapsed">
+                                <StackPanel>
+                                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                                        <TextBlock Text="硬件独占显示器（Direct Display）" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                        <Border x:Name="DirectStatusPill" CornerRadius="99" Padding="10,3" Background="{DynamicResource BorderToken}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock x:Name="DirectStatusPillText" Text="未激活" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                        </Border>
+                                    </DockPanel>
+
+                                    <TextBlock Text="选择硬件显示目标" Style="{StaticResource FieldLabel}" />
+                                    <Grid Margin="0,0,0,12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox x:Name="ComboDirectTargets" Grid.Column="0" Style="{StaticResource SpecCombo}" SelectionChanged="ComboDirectTargets_SelectionChanged" />
+                                        <Button Grid.Column="1" Content="刷新" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="BtnRefreshMonitors_Click" />
+                                    </Grid>
+
+                                    <TextBlock Text="硬件扫描输出帧率" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox x:Name="ComboDirectFps" Style="{StaticResource SpecCombo}" Margin="0,0,0,12" SelectionChanged="ComboDirectFps_SelectionChanged">
+                                        <ComboBoxItem Tag="5" Content="5 FPS（超低占用）" />
+                                        <ComboBoxItem Tag="10" Content="10 FPS（推荐 · 流畅且省电）" />
+                                        <ComboBoxItem Tag="15" Content="15 FPS（较高流畅度）" />
+                                        <ComboBoxItem Tag="30" Content="30 FPS（高刷输出）" />
+                                    </ComboBox>
+
+                                    <Border x:Name="DirectInfoBox"
+                                            Background="{DynamicResource BgPage}"
+                                            BorderBrush="{DynamicResource BorderToken}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="12,10"
+                                            Margin="0,0,0,12">
+                                        <TextBlock x:Name="TxtDirectDisplayStatus"
+                                                   Text="使用方式：先在 Windows 设置中对副屏开启「从桌面删除显示器」，再在此选择带有「已脱离桌面」标记的目标即可彻底脱离桌面硬件独占，切桌面 / Win+D / 全屏游戏均不会影响该屏。"
+                                                   FontSize="14"
+                                                   Foreground="{DynamicResource TextMuted}"
+                                                   TextWrapping="Wrap" />
+                                    </Border>
+
+                                    <DockPanel LastChildFill="False">
+                                        <Button Content="打开 Windows「从桌面删除显示器」设置" Style="{StaticResource SecondaryButton}" DockPanel.Dock="Left" Click="BtnOpenWinDisplaySettings_Click" />
+                                        <Button Content="立即独占启动" Style="{StaticResource PrimaryButton}" DockPanel.Dock="Right" Click="BtnStartDirectDisplay_Click" />
+                                    </DockPanel>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- B. Fixed Position Presets, Coordinates & Lock -->
+                            <Border x:Name="FixedWindowPanel" Style="{StaticResource SectionCard}">
                             <StackPanel>
                                 <DockPanel Margin="0,0,0,12">
                                     <TextBlock Text="窗口固定显示位置" FontSize="16" FontWeight="Medium" DockPanel.Dock="Left" />
@@ -600,6 +653,7 @@
                                            Margin="22,4,0,0" />
                             </StackPanel>
                         </Border>
+                        </Grid>
                     </Grid>
 
                     <!-- ==================== TAB 2: 外观与硬件监控 ==================== -->

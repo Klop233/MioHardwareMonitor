@@ -22,7 +22,15 @@ public sealed class AppSettings
 
     // Monitor Window chrome & separation options
     public bool HideMonitorTopBar { get; set; } = false;
-    public bool ShowDisplayInTaskbar { get; set; } = true;
+    public bool ShowDisplayInTaskbar { get; set; } = false;
+    // Keeps desktop-mode DisplayWindow visible across all Windows Virtual Desktops (Win+Ctrl+Left/Right)
+    // and protects it from Win+D Show Desktop minimization via WS_EX_TOOLWINDOW + TopMost watchdog.
+    public bool PinToAllVirtualDesktops { get; set; } = true;
+
+    // Hardware Exclusive Direct Display (Windows 11 "Remove display from desktop" / Windows.Devices.Display.Core)
+    public bool UseDirectDisplayExclusive { get; set; } = false;
+    public string? DirectDisplayTargetId { get; set; }
+    public int DirectDisplayFps { get; set; } = 10;
 
     // Control (Settings) Window remembered position
     public double? ControlWindowLeft { get; set; }
@@ -244,4 +252,21 @@ public sealed class MonitorDescriptor
     public int WorkHeight { get; set; }
     public int RefreshRateHz { get; set; }
     public double ScaleFactor { get; set; } = 1.0;
+}
+
+public sealed class DirectDisplayTargetDescriptor
+{
+    public string TargetKey { get; set; } = "";
+    public string StableMonitorId { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string AdapterName { get; set; } = "";
+    public uint AdapterLuidLow { get; set; }
+    public int AdapterLuidHigh { get; set; }
+    public uint AdapterRelativeId { get; set; }
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int RefreshRateHz { get; set; }
+    public string UsageKind { get; set; } = "Standard";
+    public bool IsSpecialized { get; set; }
+    public string FriendlyName { get; set; } = "";
 }

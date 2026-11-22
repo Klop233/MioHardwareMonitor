@@ -270,17 +270,24 @@ public partial class ControlWindow : Window
             {
                 StatusBadge.SetResourceReference(Border.BackgroundProperty, "SuccessSubtle");
                 StatusBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "Success");
-                StatusBadgeText.Text = "运行中";
+                StatusBadgeText.Text = _controller.IsDirectDisplayActive ? "硬件独占中" : "运行中";
                 BtnOpenOrRecreate.Content = "重建监控窗口";
                 BtnCloseDisplay.IsEnabled = true;
 
-                var mon = _controller.CurrentDisplayMonitor;
-                string modeStr = s.IsFullScreen
-                    ? "占用整块屏幕"
-                    : $"固定窗口 · {FormatPreset(s.WindowPositionPreset)} {effectiveRect.Width}×{effectiveRect.Height}";
-                StatusDetailText.Text = mon != null
-                    ? $"{mon.FriendlyName} · {modeStr}"
-                    : modeStr;
+                if (_controller.IsDirectDisplayActive && _controller.ActiveDirectDisplayTarget != null)
+                {
+                    StatusDetailText.Text = $"{_controller.ActiveDirectDisplayTarget.FriendlyName} · 脱离桌面直出";
+                }
+                else
+                {
+                    var mon = _controller.CurrentDisplayMonitor;
+                    string modeStr = s.IsFullScreen
+                        ? "占用整块屏幕"
+                        : $"固定窗口 · {FormatPreset(s.WindowPositionPreset)} {effectiveRect.Width}×{effectiveRect.Height}";
+                    StatusDetailText.Text = mon != null
+                        ? $"{mon.FriendlyName} · {modeStr}"
+                        : modeStr;
+                }
             }
             else
             {
@@ -289,7 +296,9 @@ public partial class ControlWindow : Window
                 StatusBadgeText.Text = "已关闭";
                 BtnOpenOrRecreate.Content = "打开监控窗口";
                 BtnCloseDisplay.IsEnabled = false;
-                StatusDetailText.Text = "监控窗口未打开，点击右侧「打开监控窗口」启动";
+                StatusDetailText.Text = !string.IsNullOrWhiteSpace(_controller.DirectDisplayErrorMessage)
+                    ? _controller.DirectDisplayErrorMessage
+                    : "监控窗口未打开，点击右侧「打开监控窗口」启动";
             }
 
             // Monitors combo
@@ -311,12 +320,18 @@ public partial class ControlWindow : Window
                     $"工作区 {targetMon.WorkWidth} × {targetMon.WorkHeight} px · 全屏 {targetMon.Width} × {targetMon.Height} px · 缩放 {Math.Round(targetMon.ScaleFactor * 100)}%";
             }
 
-            // Display Mode & Fixed Window Position Panel
-            RadioFullScreen.IsChecked = s.IsFullScreen;
-            RadioWindowed.IsChecked = !s.IsFullScreen;
+            // Display Mode & Fixed Window / Direct Display Panel
+            RadioDirectExclusive.IsChecked = s.UseDirectDisplayExclusive;
+            RadioFullScreen.IsChecked = !s.UseDirectDisplayExclusive && s.IsFullScreen;
+            RadioWindowed.IsChecked = !s.UseDirectDisplayExclusive && !s.IsFullScreen;
 
-            FixedWindowPanel.IsEnabled = !s.IsFullScreen;
+            DirectDisplayPanel.Visibility = s.UseDirectDisplayExclusive ? Visibility.Visible : Visibility.Collapsed;
+            FixedWindowPanel.Visibility = s.UseDirectDisplayExclusive ? Visibility.Collapsed : Visibility.Visible;
+
+            FixedWindowPanel.IsEnabled = !s.IsFullScreen && !s.UseDirectDisplayExclusive;
             FixedWindowPanel.Opacity = s.IsFullScreen ? 0.55 : 1.0;
+
+            RefreshDirectDisplayTargetsUi(s);
 
             string activePreset = SettingsService.NormalizePositionPreset(s.WindowPositionPreset);
             PresetStatusText.Text = s.IsFullScreen
@@ -357,8 +372,10 @@ public partial class ControlWindow : Window
 
             // General Window Options
             ChkTopMost.IsChecked = s.AlwaysOnTop;
+            ChkPinAllDesktops.IsChecked = s.PinToAllVirtualDesktops;
             ChkHideTopBar.IsChecked = s.HideMonitorTopBar;
             ChkShowInTaskbar.IsChecked = s.ShowDisplayInTaskbar;
+            ChkShowInTaskbar.IsEnabled = !s.PinToAllVirtualDesktops;
             SelectComboByTag(ComboRenderMode, s.RenderMode ?? "safe");
 
             // Appearance & Hardware Monitor
@@ -535,7 +552,111 @@ public partial class ControlWindow : Window
     private void RadioMode_Changed(object sender, RoutedEventArgs e)
     {
         if (_suppressEvents) return;
-        _controller.SetFullScreen(RadioFullScreen.IsChecked == true);
+        if (RadioDirectExclusive.IsChecked == true)
+        {
+            _controller.SetDisplayMode(useDirectExclusive: true, isFullScreen: true);
+        }
+        else if (RadioFullScreen.IsChecked == true)
+        {
+            _controller.SetDisplayMode(useDirectExclusive: false, isFullScreen: true);
+        }
+        else
+        {
+            _controller.SetDisplayMode(useDirectExclusive: false, isFullScreen: false);
+        }
+    }
+
+    private void RefreshDirectDisplayTargetsUi(AppSettings s)
+    {
+        var targets = DirectDisplayService.EnumerateTargets();
+        ComboDirectTargets.Items.Clear();
+        int selectedIdx = 0;
+
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var t = targets[i];
+            ComboDirectTargets.Items.Add(new ComboBoxItem { Content = t.FriendlyName, Tag = t.TargetKey });
+            if (!string.IsNullOrWhiteSpace(s.DirectDisplayTargetId) &&
+                (string.Equals(t.TargetKey, s.DirectDisplayTargetId, StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(t.StableMonitorId, s.DirectDisplayTargetId, StringComparison.OrdinalIgnoreCase)))
+            {
+                selectedIdx = i;
+            }
+        }
+
+        if (ComboDirectTargets.Items.Count > 0)
+            ComboDirectTargets.SelectedIndex = selectedIdx;
+
+        SelectComboByTag(ComboDirectFps, s.DirectDisplayFps.ToString());
+
+        int specializedCount = targets.Count(t => t.IsSpecialized);
+        if (_controller.IsDirectDisplayActive && _controller.ActiveDirectDisplayTarget != null)
+        {
+            DirectStatusPill.SetResourceReference(Border.BackgroundProperty, "SuccessSubtle");
+            DirectStatusPillText.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            DirectStatusPillText.Text = "已硬件独占";
+            DirectInfoBox.SetResourceReference(Border.BorderBrushProperty, "Success");
+            TxtDirectDisplayStatus.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            TxtDirectDisplayStatus.Text = $"硬件直出运行中：{_controller.ActiveDirectDisplayTarget.FriendlyName} · 已彻底脱离 Windows 桌面（切虚拟桌面、Win+D、全屏游戏均完全不受影响）。";
+        }
+        else if (!string.IsNullOrWhiteSpace(_controller.DirectDisplayErrorMessage))
+        {
+            DirectStatusPill.SetResourceReference(Border.BackgroundProperty, "DangerSubtle");
+            DirectStatusPillText.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            DirectStatusPillText.Text = "独占失败";
+            DirectInfoBox.SetResourceReference(Border.BorderBrushProperty, "Danger");
+            TxtDirectDisplayStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            TxtDirectDisplayStatus.Text = _controller.DirectDisplayErrorMessage;
+        }
+        else if (specializedCount > 0)
+        {
+            DirectStatusPill.SetResourceReference(Border.BackgroundProperty, "AccentSubtle");
+            DirectStatusPillText.SetResourceReference(TextBlock.ForegroundProperty, "AccentText");
+            DirectStatusPillText.Text = $"就绪 ({specializedCount} 台)";
+            DirectInfoBox.SetResourceReference(Border.BorderBrushProperty, "BorderToken");
+            TxtDirectDisplayStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMain");
+            TxtDirectDisplayStatus.Text = $"已检测到 {specializedCount} 台「已脱离桌面」的专用显示器，点击右侧「立即独占启动」即可直接接管硬件扫描输出。";
+        }
+        else
+        {
+            DirectStatusPill.SetResourceReference(Border.BackgroundProperty, "BorderToken");
+            DirectStatusPillText.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            DirectStatusPillText.Text = "等待脱离桌面";
+            DirectInfoBox.SetResourceReference(Border.BorderBrushProperty, "BorderToken");
+            TxtDirectDisplayStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            TxtDirectDisplayStatus.Text = "尚未检测到已脱离桌面的显示器。请先点击下方按钮打开 Windows 高级显示器设置，对副屏开启「从桌面删除显示器」，再点击刷新即可硬件独占。";
+        }
+    }
+
+    private void ComboDirectTargets_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        string key = GetSelectedTag(ComboDirectTargets, "");
+        if (!string.IsNullOrWhiteSpace(key)) _controller.SetDirectDisplayTarget(key);
+    }
+
+    private void ComboDirectFps_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        if (int.TryParse(GetSelectedTag(ComboDirectFps, "10"), out int fps))
+            _controller.SetDirectDisplayFps(fps);
+    }
+
+    private void BtnOpenWinDisplaySettings_Click(object sender, RoutedEventArgs e) =>
+        AppController.OpenWindowsSpecializedDisplaySettings();
+
+    private void BtnStartDirectDisplay_Click(object sender, RoutedEventArgs e)
+    {
+        string key = GetSelectedTag(ComboDirectTargets, "");
+        if (!string.IsNullOrWhiteSpace(key))
+            _controller.Settings.DirectDisplayTargetId = key;
+        _controller.SetDisplayMode(useDirectExclusive: true, isFullScreen: true);
+    }
+
+    private void ChkPinAllDesktops_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        _controller.SetPinToAllVirtualDesktops(ChkPinAllDesktops.IsChecked == true);
     }
 
     private void BtnPreset_Click(object sender, RoutedEventArgs e)
