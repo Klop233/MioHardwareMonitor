@@ -1,0 +1,26 @@
+# Build outputs
+bin/
+obj/
+dist/
+out/
+publish/
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Test & temporary files
+self-test-report.json
+*.log
+*.tmp
+*.zip
+*.nupkg
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

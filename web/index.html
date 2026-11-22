@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-colors="cn" data-layout="split" data-fullscreen="false" data-window-locked="true" data-hide-topbar="false">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <title>星澪硬件监控 — 监控窗口</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="hud-root" class="hud-root">
+    <!-- Pure Data Display Top Bar (No settings controls; all settings live in Settings Window) -->
+    <header id="topbar" class="topbar">
+      <div class="brand-block" data-drag="true">
+        <span class="brand-name">星澪科技</span>
+        <span class="brand-divider" aria-hidden="true"></span>
+        <span class="brand-app">硬件监控</span>
+      </div>
+
+      <div class="topbar-main">
+        <div class="topbar-drag-zone" data-drag="true">
+          <span id="clock-datetime" class="mono topbar-clock">—</span>
+          <span class="topbar-sep" aria-hidden="true"></span>
+          <span class="topbar-meta-label">运行时间</span>
+          <span id="uptime-badge" class="mono topbar-meta-val">—</span>
+        </div>
+
+        <div class="topbar-actions">
+          <span id="window-mode-badge" class="status-pill neutral">固定已锁定</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Compact Hardware Strip (Market Focus mode only) -->
+    <div id="compact-hw-strip" class="compact-strip hidden" aria-label="硬件摘要">
+      <div class="strip-item"><span class="label-muted">CPU</span><span id="strip-cpu" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">GPU</span><span id="strip-gpu" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">显存</span><span id="strip-vram" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">内存</span><span id="strip-ram" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">下行</span><span id="strip-net-dn" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">上行</span><span id="strip-net-up" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">国内 IP</span><span id="strip-ip-cn" class="mono strip-val">—</span></div>
+      <div class="strip-item"><span class="label-muted">国外 IP</span><span id="strip-ip-intl" class="mono strip-val">—</span></div>
+    </div>
+
+    <!-- Main Pure Data Grid -->
+    <main class="main-grid">
+      <!-- LEFT: HARDWARE MONITOR PANEL -->
+      <section class="hardware-panel" aria-label="硬件监控">
+        <!-- 1. CPU Monitor Card (Task Manager Logical Processors Grid) -->
+        <article class="card cpu-card">
+          <div class="card-head">
+            <div class="card-title-group">
+              <h2 class="card-title">CPU 监控</h2>
+              <span id="cpu-name" class="card-subtitle">检测中</span>
+            </div>
+            <div class="card-head-right">
+              <span id="cpu-view-pill" class="status-pill neutral">逻辑处理器</span>
+              <span id="cpu-health-pill" class="status-pill success">健康正常</span>
+            </div>
+          </div>
+
+          <div class="kpi-strip">
+            <div class="kpi-cell">
+              <span class="label-muted">总利用率</span>
+              <span id="cpu-pct" class="mono kpi-big">0%</span>
+            </div>
+            <div class="kpi-cell">
+              <span class="label-muted">当前 / 基准频率</span>
+              <span id="cpu-clock" class="mono kpi-val">—</span>
+            </div>
+            <div class="kpi-cell">
+              <span class="label-muted">核心 / 线程</span>
+              <span id="cpu-cores" class="mono kpi-val">—</span>
+            </div>
+            <div class="kpi-cell">
+              <span class="label-muted">封装温度 / 功耗</span>
+              <span id="cpu-temp-power" class="mono kpi-val">—</span>
+            </div>
+          </div>
+
+          <div class="cpu-graph-bar">
+            <span id="cpu-graph-caption" class="label-muted">所有逻辑处理器（60 秒实时曲线）</span>
+            <span id="cpu-core-hover" class="mono cpu-hover-info">悬停核心查看单核读数</span>
+          </div>
+
+          <div id="cpu-cores-wrap" class="cpu-canvas-wrap">
+            <canvas id="cpu-cores-canvas" class="full-canvas"></canvas>
+          </div>
+          <div id="cpu-overall-wrap" class="cpu-canvas-wrap hidden">
+            <canvas id="spark-cpu" class="full-canvas"></canvas>
+          </div>
+        </article>
+
+        <!-- 2. GPU + Memory Row -->
+        <div class="hw-two-col">
+          <!-- GPU Card -->
+          <article class="card gpu-card">
+            <div class="card-head">
+              <div class="card-title-group">
+                <h2 class="card-title">GPU 监控</h2>
+                <span id="gpu-name" class="card-subtitle">检测中</span>
+              </div>
+              <span id="gpu-health-pill" class="status-pill success">运行正常</span>
+            </div>
+
+            <div class="metric-row">
+              <div class="metric-primary">
+                <span id="gpu-pct" class="mono kpi-big">0%</span>
+                <span id="gpu-clock" class="mono metric-sub">—</span>
+              </div>
+              <dl class="detail-grid compact">
+                <dt>温度 / 热点</dt><dd id="gpu-temp" class="mono">—</dd>
+                <dt>功耗 / 风扇</dt><dd id="gpu-power-fan" class="mono">—</dd>
+                <dt>显存频率</dt><dd id="gpu-mem-clk" class="mono">—</dd>
+              </dl>
+            </div>
+
+            <div class="spark-box">
+              <canvas id="spark-gpu" class="full-canvas"></canvas>
+            </div>
+
+            <div class="bar-block">
+              <div class="bar-head">
+                <span class="label-muted">专用显存 (VRAM)</span>
+                <span id="gpu-vram-text" class="mono">0.0 / 0.0 GB (0%)</span>
+              </div>
+              <div class="progress-track" role="progressbar" aria-label="专用显存占用">
+                <div id="gpu-vram-bar" class="progress-fill" style="width: 0%"></div>
+              </div>
+              <div id="igpu-row" class="igpu-line hidden"></div>
+            </div>
+          </article>
+
+          <!-- Memory Card -->
+          <article class="card ram-card">
+            <div class="card-head">
+              <div class="card-title-group">
+                <h2 class="card-title">系统内存</h2>
+                <span id="ram-speed" class="status-pill neutral hidden">—</span>
+              </div>
+              <span id="ram-health-pill" class="status-pill success">正常</span>
+            </div>
+
+            <div class="metric-row">
+              <div class="metric-primary">
+                <span id="ram-pct" class="mono kpi-big">0%</span>
+                <span id="ram-used-total" class="mono metric-sub">0.0 / 0.0 GB</span>
+              </div>
+              <dl class="detail-grid compact">
+                <dt>已用内存</dt><dd id="ram-used-only" class="mono">—</dd>
+                <dt>可用内存</dt><dd id="ram-avail" class="mono">—</dd>
+                <dt>总容量</dt><dd id="ram-total-only" class="mono">—</dd>
+              </dl>
+            </div>
+
+            <div class="bar-block">
+              <div class="progress-track" role="progressbar" aria-label="系统内存占用">
+                <div id="ram-bar" class="progress-fill" style="width: 0%"></div>
+              </div>
+            </div>
+
+            <div class="spark-box">
+              <canvas id="spark-ram" class="full-canvas"></canvas>
+            </div>
+          </article>
+        </div>
+
+        <!-- 3. Network (Domestic & Overseas IPv4) + Disk Row -->
+        <div class="hw-two-col">
+          <!-- Network Card -->
+          <article class="card net-card">
+            <div class="card-head">
+              <div class="card-title-group">
+                <h2 class="card-title">网络监控</h2>
+                <span id="net-adapter" class="card-subtitle">检测中</span>
+              </div>
+              <span id="ip-status-pill" class="status-pill neutral">IPv4</span>
+            </div>
+
+            <div class="net-speed-strip">
+              <div class="net-speed-item">
+                <span class="label-muted">下行速率</span>
+                <span id="net-dn" class="mono net-speed-val accent-text">0 KB/s</span>
+              </div>
+              <div class="net-speed-item">
+                <span class="label-muted">上行速率</span>
+                <span id="net-up" class="mono net-speed-val">0 KB/s</span>
+              </div>
+              <div class="net-speed-item">
+                <span class="label-muted">本次流量</span>
+                <span id="net-session" class="mono net-session-val">↓ 0 M / ↑ 0 M</span>
+              </div>
+            </div>
+
+            <dl class="ip-detail-list" aria-label="出口 IPv4 地址">
+              <dt>国内站 IP</dt>
+              <dd class="ip-val-cell">
+                <span id="ip-domestic" class="mono ip-addr">检测中</span>
+                <span id="ip-domestic-loc" class="ip-loc">—</span>
+              </dd>
+              <dt>国外站 IP</dt>
+              <dd class="ip-val-cell">
+                <span id="ip-overseas" class="mono ip-addr">检测中</span>
+                <span id="ip-overseas-loc" class="ip-loc">—</span>
+              </dd>
+            </dl>
+
+            <div class="spark-box sm">
+              <canvas id="spark-net" class="full-canvas"></canvas>
+            </div>
+          </article>
+
+          <!-- Disk Card -->
+          <article class="card disk-card">
+            <div class="card-head">
+              <div class="card-title-group">
+                <h2 class="card-title">存储与读写</h2>
+              </div>
+              <div class="disk-io-readout mono">
+                <span>读 <strong id="disk-read">0 MB/s</strong></span>
+                <span class="io-sep">/</span>
+                <span>写 <strong id="disk-write">0 MB/s</strong></span>
+              </div>
+            </div>
+            <div id="drive-list" class="drive-list"></div>
+          </article>
+        </div>
+
+        <!-- 4. Top Processes Table Card (Pure Read-Only Table) -->
+        <article class="card proc-card">
+          <div class="card-head">
+            <div class="card-title-group">
+              <h2 class="card-title">高占用进程</h2>
+            </div>
+            <span id="proc-sort-pill" class="status-pill neutral">按 CPU 排序</span>
+          </div>
+          <div class="spec-table" role="table" aria-label="高占用进程列表">
+            <div class="spec-thead" role="row">
+              <span role="columnheader">进程名称</span>
+              <span role="columnheader" class="align-right">PID</span>
+              <span role="columnheader" id="col-hdr-cpu" class="align-right">CPU 占用</span>
+              <span role="columnheader" id="col-hdr-mem" class="align-right">内存占用</span>
+            </div>
+            <div id="proc-list" class="spec-tbody"></div>
+          </div>
+        </article>
+      </section>
+
+      <!-- RIGHT: PURE READ-ONLY MARKET & K-LINE PANEL -->
+      <section class="market-panel" aria-label="行情与 K 线">
+        <!-- K-Line Card -->
+        <article class="card kline-card">
+          <div class="kline-top">
+            <div class="kline-title-col">
+              <div class="kline-sym-row">
+                <span id="kl-code" class="mono kl-code">BTC/USDT</span>
+                <span id="kl-name" class="kl-name">比特币</span>
+                <span id="kl-source" class="status-pill info">LIVE</span>
+                <span id="kl-funding" class="status-pill warning mono hidden">费率 —</span>
+              </div>
+              <div class="kline-price-row">
+                <span id="kl-price" class="mono kl-price">—</span>
+                <span id="kl-change" class="mono status-pill neutral">—</span>
+                <span class="kl-hl mono">高 <span id="kl-high">—</span> · 低 <span id="kl-low">—</span><span id="kl-mark-wrap" class="hidden"> · 标记 <span id="kl-mark">—</span></span></span>
+              </div>
+            </div>
+
+            <div class="kline-meta-pills">
+              <span id="kl-interval-pill" class="status-pill info mono">15m</span>
+              <span id="kl-indicators-pill" class="status-pill neutral mono">MA · VOL</span>
+            </div>
+          </div>
+
+          <div class="kline-canvas-wrap">
+            <div id="kline-hud" class="kline-hud mono">
+              <span>开 <strong id="hud-o">—</strong></span>
+              <span>高 <strong id="hud-h">—</strong></span>
+              <span>低 <strong id="hud-l">—</strong></span>
+              <span>收 <strong id="hud-c">—</strong></span>
+              <span id="hud-chg">—</span>
+              <span class="ma5">MA5 <strong id="hud-ma5">—</strong></span>
+              <span class="ma10">MA10 <strong id="hud-ma10">—</strong></span>
+              <span class="ma20">MA20 <strong id="hud-ma20">—</strong></span>
+            </div>
+            <canvas id="kline-canvas" class="full-canvas"></canvas>
+            <div id="kline-status" class="kline-status hidden">正在加载 K 线数据</div>
+          </div>
+        </article>
+
+        <!-- Watchlist + Read-Only FX Rate Display Card -->
+        <article class="card watchlist-card">
+          <div class="watchlist-head">
+            <div class="card-title-group">
+              <h2 id="watchlist-cat-title" class="card-title">虚拟货币</h2>
+              <span id="watchlist-count-pill" class="status-pill neutral mono">0</span>
+              <span id="watchlist-exchange-pill" class="status-pill info hidden">Binance · 永续</span>
+            </div>
+            <span id="market-updated" class="label-muted mono">等待行情</span>
+          </div>
+
+          <div id="watchlist-grid" class="watchlist-grid"></div>
+
+          <!-- Pure Read-Only FX Conversion Strip (configured in Settings Window) -->
+          <div class="fx-readonly-bar" aria-label="实时汇率换算">
+            <span class="label-muted">汇率换算</span>
+            <span id="fx-expression" class="mono fx-expr">100 USD = — CNY</span>
+            <span id="fx-unit-rate" class="mono label-muted fx-rate">—</span>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <!-- Compact Market Ticker Strip (Hardware Focus mode only) -->
+    <div id="compact-market-strip" class="compact-strip market-strip hidden" aria-label="行情摘要"></div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,150 @@
+name: Build & Publish Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: '可选：自定义发布版本号（如 1.1.0；留空则按 csproj Version 自动生成）'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Compute Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      release_tag: ${{ steps.ver.outputs.release_tag }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Determine release version and tag
+        id: ver
+        shell: bash
+        run: |
+          OVERRIDE="${{ github.event.inputs.version_override }}"
+          if [ -n "$OVERRIDE" ]; then
+            RAW_VER="${OVERRIDE#v}"
+            RAW_VER="${RAW_VER#V}"
+            TAG="v${RAW_VER}"
+          else
+            RAW_VER=$(sed -n 's/.*<Version>\(.*\)<\/Version>.*/\1/p' SideScreenHUD.csproj | head -n 1 | tr -d '[:space:]')
+            if [ -z "$RAW_VER" ]; then
+              RAW_VER="1.0.0"
+            fi
+            CANDIDATE="v${RAW_VER}"
+            if git rev-parse -q --verify "refs/tags/${CANDIDATE}" >/dev/null; then
+              TAG="${CANDIDATE}-b${{ github.run_number }}"
+            else
+              TAG="${CANDIDATE}"
+            fi
+          fi
+          echo "version=${RAW_VER}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${RAW_VER}, release_tag=${TAG}"
+
+  build:
+    name: Build & Package (${{ matrix.rid }})
+    needs: prepare
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Ensure Inno Setup 6 is installed
+        shell: pwsh
+        run: |
+          $iscc = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc -and -not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            Write-Host "Installing Inno Setup via Chocolatey..."
+            choco install innosetup -y --no-progress
+          } else {
+            Write-Host "Found Inno Setup: $iscc"
+          }
+
+      - name: Publish ZIP and Setup Installer
+        shell: pwsh
+        run: |
+          .\scripts\build-release.ps1 `
+            -Version "${{ needs.prepare.outputs.version }}" `
+            -Tag "${{ needs.prepare.outputs.release_tag }}" `
+            -Archs @("${{ matrix.rid }}") `
+            -OutputDir "dist\release-${{ matrix.rid }}" `
+            -RequireInstaller
+
+      - name: Upload ${{ matrix.rid }} artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.rid }}
+          path: |
+            dist/release-${{ matrix.rid }}/*.zip
+            dist/release-${{ matrix.rid }}/*.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate combined SHA256SUMS.txt
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum *.zip *.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          name: 星澪硬件监控 ${{ needs.prepare.outputs.release_tag }}
+          generate_release_notes: true
+          make_latest: true
+          body: |
+            ## 发布说明
+
+            本次构建已自动打包 **Windows x64** 与 **Windows ARM64** 两个架构的自包含版本（已内置 .NET 10 运行时，无需额外安装 .NET Desktop Runtime）：
+
+            | 架构 | 便携压缩包（解压即用） | Windows 安装包（支持桌面快捷方式与开机自启） |
+            |---|---|---|
+            | **x64** | `SideScreenHUD-${{ needs.prepare.outputs.release_tag }}-win-x64.zip` | `SideScreenHUD-${{ needs.prepare.outputs.release_tag }}-win-x64-Setup.exe` |
+            | **ARM64** | `SideScreenHUD-${{ needs.prepare.outputs.release_tag }}-win-arm64.zip` | `SideScreenHUD-${{ needs.prepare.outputs.release_tag }}-win-arm64-Setup.exe` |
+
+            > 提示：监控窗口依赖系统内置的 Microsoft Edge WebView2 Runtime（Windows 10/11 默认自带）；如需查看 CPU 封装温度传感器，可在设置窗口点击「以管理员重启」。
+          files: |
+            release-assets/*.zip
+            release-assets/*.exe
+            release-assets/SHA256SUMS.txt
