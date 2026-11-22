@@ -14,7 +14,8 @@
     <AssemblyName>SideScreenHUD</AssemblyName>
     <RootNamespace>SideScreenHUD</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.4.0</Version>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
+    <Version>1.5.0</Version>
     <Product>SideScreen HUD - 副屏信息仪表盘</Product>
   </PropertyGroup>
 
@@ -26,6 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="Assets\app.ico" />
     <Content Include="web\**\*.*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

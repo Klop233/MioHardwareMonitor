@@ -1,7 +1,9 @@
 <Window x:Class="SideScreenHUD.ControlWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="星澪硬件监控 — 设置窗口"
+        Title="星澪硬件监控 — 管理面板"
+        Icon="pack://application:,,,/Assets/app.ico"
+        ShowInTaskbar="True"
         Width="1120"
         Height="630"
         MinWidth="960"
@@ -404,7 +406,7 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock Text="星澪科技" Foreground="#FFFFFF" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" />
                         <Border Width="1" Height="16" Background="#80FFFFFF" Margin="10,0" VerticalAlignment="Center" />
-                        <TextBlock Text="设置窗口" Foreground="#FFFFFF" FontSize="14" VerticalAlignment="Center" />
+                        <TextBlock Text="管理面板" Foreground="#FFFFFF" FontSize="14" VerticalAlignment="Center" />
                     </StackPanel>
                 </Border>
 
@@ -516,7 +518,11 @@
                                 <CheckBox x:Name="ChkTopMost" Content="监控窗口置顶（默认开启）" Style="{StaticResource SpecCheck}" Checked="ChkTopMost_Changed" Unchecked="ChkTopMost_Changed" />
                                 <CheckBox x:Name="ChkPinAllDesktops" Content="跨虚拟桌面常驻与防 Win+D 隐藏（切桌面不消失）" Style="{StaticResource SpecCheck}" Checked="ChkPinAllDesktops_Changed" Unchecked="ChkPinAllDesktops_Changed" />
                                 <CheckBox x:Name="ChkHideTopBar" Content="隐藏监控窗口顶栏（纯数据展示）" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
-                                <CheckBox x:Name="ChkShowInTaskbar" Content="在任务栏显示监控窗口（需关闭跨桌面常驻）" Style="{StaticResource SpecCheck}" Checked="ChkShowInTaskbar_Changed" Unchecked="ChkShowInTaskbar_Changed" />
+                                <TextBlock Text="监控窗口不占用任务栏，任务栏仅保留管理面板（设置窗口）。"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           FontSize="14"
+                                           TextWrapping="Wrap"
+                                           Margin="0,6,0,0" />
                             </StackPanel>
                         </Border>
 
@@ -790,9 +796,16 @@
                             <Border Style="{StaticResource SectionCard}" Margin="0,0,0,16">
                                 <StackPanel>
                                     <TextBlock Text="启动、托盘与传感器权限" FontSize="16" FontWeight="Medium" Margin="0,0,0,10" />
-                                    <CheckBox x:Name="ChkAutoOpenDisplay" Content="启动时自动打开监控窗口" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
-                                    <CheckBox x:Name="ChkShowControl" Content="启动时打开设置窗口" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
-                                    <CheckBox x:Name="ChkMinTray" Content="关闭设置窗口时隐藏到系统托盘" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
+                                    <CheckBox x:Name="ChkAutoStart" Content="开机自动启动（登录后静默恢复上次显示模式）" Style="{StaticResource SpecCheck}" Checked="ChkAutoStart_Changed" Unchecked="ChkAutoStart_Changed" />
+                                    <TextBlock x:Name="TxtAutoStartSummary"
+                                               Text="开机自启将静默恢复上次显示模式与目标屏幕。"
+                                               Foreground="{DynamicResource TextMuted}"
+                                               FontSize="14"
+                                               TextWrapping="Wrap"
+                                               Margin="22,0,0,6" />
+                                    <CheckBox x:Name="ChkAutoOpenDisplay" Content="手动启动时自动打开监控窗口" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
+                                    <CheckBox x:Name="ChkShowControl" Content="手动启动时打开管理面板" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
+                                    <CheckBox x:Name="ChkMinTray" Content="关闭管理面板时隐藏到系统托盘" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
                                     <CheckBox x:Name="ChkOled" Content="OLED 防烧屏微位移" Style="{StaticResource SpecCheck}" Margin="0,0,0,10" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
 
                                     <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="0,12,0,0">

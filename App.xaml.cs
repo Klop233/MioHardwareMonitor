@@ -26,16 +26,21 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        bool isAutoStart = e.Args.Any(a => a.Equals(AutoStartService.AutoStartArg, StringComparison.OrdinalIgnoreCase));
+
         _singleInstanceMutex = new Mutex(true, "SideScreenHUD_SingleInstance_Mutex_v1", out bool createdNew);
         if (!createdNew)
         {
-            System.Windows.MessageBox.Show("SideScreen HUD 已经在运行中（请检查系统托盘或控制窗口）。", "SideScreen HUD", MessageBoxButton.OK, MessageBoxImage.Information);
+            if (!isAutoStart)
+            {
+                System.Windows.MessageBox.Show("SideScreen HUD 已经在运行中（请检查系统托盘或管理面板）。", "SideScreen HUD", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
             Shutdown();
             return;
         }
 
         _controller = new AppController();
-        _controller.Start();
+        _controller.Start(startedFromAutoStart: isAutoStart);
     }
 
     private static async Task RunSelfTestAsync()

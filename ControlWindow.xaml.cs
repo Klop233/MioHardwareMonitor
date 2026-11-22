@@ -388,8 +388,6 @@ public partial class ControlWindow : Window
             ChkTopMost.IsChecked = s.AlwaysOnTop;
             ChkPinAllDesktops.IsChecked = s.PinToAllVirtualDesktops;
             ChkHideTopBar.IsChecked = s.HideMonitorTopBar;
-            ChkShowInTaskbar.IsChecked = s.ShowDisplayInTaskbar;
-            ChkShowInTaskbar.IsEnabled = !s.PinToAllVirtualDesktops;
             SelectComboByTag(ComboRenderMode, s.RenderMode ?? "safe");
 
             // Appearance & Hardware Monitor
@@ -413,6 +411,8 @@ public partial class ControlWindow : Window
             }
 
             // Startup, Updates & Elevation
+            ChkAutoStart.IsChecked = _controller.IsAutoStartEnabled;
+            TxtAutoStartSummary.Text = _controller.GetStartupRestoreSummary();
             ChkAutoOpenDisplay.IsChecked = s.AutoOpenDisplayOnStartup;
             ChkShowControl.IsChecked = s.ShowControlOnStartup;
             ChkMinTray.IsChecked = s.MinimizeToTray;
@@ -769,10 +769,22 @@ public partial class ControlWindow : Window
         _controller.SetAlwaysOnTop(ChkTopMost.IsChecked == true);
     }
 
-    private void ChkShowInTaskbar_Changed(object sender, RoutedEventArgs e)
+    private void ChkAutoStart_Changed(object sender, RoutedEventArgs e)
     {
         if (_suppressEvents) return;
-        _controller.SetShowDisplayInTaskbar(ChkShowInTaskbar.IsChecked == true);
+        bool want = ChkAutoStart.IsChecked == true;
+        var res = _controller.SetAutoStart(want);
+        if (!res.Success)
+        {
+            _suppressEvents = true;
+            try { ChkAutoStart.IsChecked = _controller.IsAutoStartEnabled; }
+            finally { _suppressEvents = false; }
+            System.Windows.MessageBox.Show(
+                $"无法更新开机自启设置：{res.ErrorMessage ?? "未知错误"}",
+                "星澪硬件监控",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private void ComboVisual_Changed(object sender, SelectionChangedEventArgs e)

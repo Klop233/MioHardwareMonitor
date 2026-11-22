@@ -42,6 +42,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 AppMutex=SideScreenHUD_SingleInstance_Mutex_v1
 CloseApplications=force
 RestartApplications=no
+SetupIconFile=..\Assets\app.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} ({#MyAppEnName})
 
@@ -77,7 +78,7 @@ Name: "{group}\卸载 {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SideScreenHUD"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: autostart
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "SideScreenHUD"; ValueData: """{app}\{#MyAppExeName}"" --autostart"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "立即启动 {#MyAppName} (Launch {#MyAppEnName})"; Flags: nowait postinstall skipifsilent

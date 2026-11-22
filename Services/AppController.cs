@@ -64,6 +64,7 @@ public sealed class AppController : IDisposable
     public DirectDisplayTargetDescriptor? ActiveDirectDisplayTarget => _displayWindow?.DirectDisplayTarget;
     public string DirectDisplayErrorMessage { get; private set; } = "";
     public bool IsElevated => _lastTelemetry?.IsElevated ?? false;
+    public bool IsAutoStartEnabled => AutoStartService.IsEnabled();
     public MonitorDescriptor? CurrentDisplayMonitor => _displayWindow?.CurrentMonitor;
     public MonitorDescriptor? TargetMonitor => _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
     public TelemetrySnapshot? LastTelemetry { get { lock (_cacheSync) return _lastTelemetry; } }
@@ -75,8 +76,10 @@ public sealed class AppController : IDisposable
 
     public UpdateStateSnapshot GetUpdateState() => _updateService.GetState();
 
-    public void Start()
+    public void Start(bool startedFromAutoStart = false)
     {
+        AutoStartService.SyncPathIfEnabled();
+
         _updateService.StateChanged += snap =>
         {
             try { UpdateStateChanged?.Invoke(snap); } catch { }
@@ -105,6 +108,14 @@ public sealed class AppController : IDisposable
 
         StartBackgroundLoops();
 
+        if (startedFromAutoStart)
+        {
+            // On Windows boot auto-start: restore the exact previous monitor display mode quietly in background
+            // (do not clutter the desktop with the management panel; user can open it anytime via system tray).
+            _ = RestoreDisplayOnAutoStartAsync();
+            return;
+        }
+
         // Open DisplayWindow on target monitor
         if (Settings.AutoOpenDisplayOnStartup)
         {
@@ -116,6 +127,99 @@ public sealed class AppController : IDisposable
         {
             ShowControlWindow();
         }
+    }
+
+    private async Task RestoreDisplayOnAutoStartAsync()
+    {
+        try
+        {
+            // Give Windows desktop / GPU drivers / secondary displays a moment to finish initializing after login
+            await Task.Delay(1500, _cts.Token);
+
+            if (Settings.UseDirectDisplayExclusive)
+            {
+                int[] retryDelaysMs = { 0, 2500, 4000, 6000 };
+                for (int i = 0; i < retryDelaysMs.Length; i++)
+                {
+                    if (_disposed || _cts.IsCancellationRequested || !Settings.UseDirectDisplayExclusive)
+                        return;
+
+                    if (retryDelaysMs[i] > 0)
+                    {
+                        await Task.Delay(retryDelaysMs[i], _cts.Token);
+                    }
+
+                    await RecreateDisplayWindowAsync();
+                    if (IsDirectDisplayActive)
+                        return;
+                }
+
+                if (!_disposed && Settings.UseDirectDisplayExclusive && !IsDirectDisplayActive)
+                {
+                    _trayManager?.ShowBalloon(
+                        "硬件独占副屏暂未就绪",
+                        string.IsNullOrWhiteSpace(DirectDisplayErrorMessage)
+                            ? "开机恢复硬件独占模式失败，请检查副屏连接或右键托盘重新启动。"
+                            : DirectDisplayErrorMessage);
+                }
+                return;
+            }
+
+            // Desktop Fullscreen or Fixed Window mode: if the saved secondary monitor hasn't woken up yet, wait briefly before opening
+            if (!string.IsNullOrWhiteSpace(Settings.TargetMonitorDevice))
+            {
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    var monitors = _displayManager.GetMonitors();
+                    if (monitors.Any(m => string.Equals(m.DeviceName, Settings.TargetMonitorDevice, StringComparison.OrdinalIgnoreCase)))
+                        break;
+                    await Task.Delay(1500, _cts.Token);
+                }
+            }
+
+            if (!_disposed && !_cts.IsCancellationRequested)
+            {
+                await RecreateDisplayWindowAsync();
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
+    public (bool Success, string? ErrorMessage) SetAutoStart(bool enabled)
+    {
+        var result = AutoStartService.SetEnabled(enabled);
+        RefreshTrayMenu();
+        NotifyStateChanged();
+        return result;
+    }
+
+    public string GetStartupRestoreSummary()
+    {
+        var s = Settings;
+        if (s.UseDirectDisplayExclusive)
+        {
+            string targetName = ActiveDirectDisplayTarget?.DisplayName ?? "";
+            if (string.IsNullOrWhiteSpace(targetName) && !string.IsNullOrWhiteSpace(s.DirectDisplayTargetId))
+            {
+                var found = DirectDisplayService.EnumerateTargets().FirstOrDefault(t =>
+                    string.Equals(t.TargetKey, s.DirectDisplayTargetId, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(t.StableMonitorId, s.DirectDisplayTargetId, StringComparison.OrdinalIgnoreCase));
+                targetName = found?.DisplayName ?? "已脱离桌面的专用副屏";
+            }
+            return string.IsNullOrWhiteSpace(targetName)
+                ? "开机自启将静默恢复：硬件独占显示器（Direct Display）"
+                : $"开机自启将静默恢复：硬件独占显示器 · {targetName}";
+        }
+
+        var mon = CurrentDisplayMonitor ?? TargetMonitor;
+        string monLabel = mon?.FriendlyName ?? (string.IsNullOrWhiteSpace(s.TargetMonitorDevice) ? "目标屏幕" : s.TargetMonitorDevice);
+        if (s.IsFullScreen)
+        {
+            return $"开机自启将静默恢复：桌面无边框全屏 · {monLabel}";
+        }
+
+        return $"开机自启将静默恢复：固定窗口（{(int)s.WindowWidth}×{(int)s.WindowHeight}）· {monLabel}";
     }
 
     public void ShowControlWindow(string? initialTab = null)
@@ -223,8 +327,11 @@ public sealed class AppController : IDisposable
                 }
 
                 DirectDisplayErrorMessage = "";
-                Settings.DirectDisplayTargetId = directSession.Descriptor.TargetKey;
-                _settingsService.Save();
+                if (string.IsNullOrWhiteSpace(Settings.DirectDisplayTargetId))
+                {
+                    Settings.DirectDisplayTargetId = directSession.Descriptor.TargetKey;
+                    _settingsService.Save();
+                }
 
                 directSession.SessionInvalidated += reason =>
                 {
@@ -274,8 +381,11 @@ public sealed class AppController : IDisposable
             var target = _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
             if (target == null) return;
 
-            Settings.TargetMonitorDevice = target.DeviceName;
-            _settingsService.Save();
+            if (string.IsNullOrWhiteSpace(Settings.TargetMonitorDevice))
+            {
+                Settings.TargetMonitorDevice = target.DeviceName;
+                _settingsService.Save();
+            }
 
             await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
             {
@@ -422,6 +532,8 @@ public sealed class AppController : IDisposable
 
     public void SetWindowPositionPreset(string preset)
     {
+        bool leavingDirect = Settings.UseDirectDisplayExclusive;
+        Settings.UseDirectDisplayExclusive = false;
         Settings.WindowPositionPreset = SettingsService.NormalizePositionPreset(preset);
         Settings.IsFullScreen = false;
 
@@ -434,6 +546,14 @@ public sealed class AppController : IDisposable
 
         _settingsService.Save();
 
+        if (leavingDirect || _displayWindow == null)
+        {
+            _ = RecreateDisplayWindowAsync();
+            RefreshTrayMenu();
+            NotifyStateChanged();
+            return;
+        }
+
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
             _displayWindow?.ApplyDisplayModeAndGeometry();
@@ -444,6 +564,8 @@ public sealed class AppController : IDisposable
 
     public void SetCustomWindowGeometry(int offsetX, int offsetY, int width, int height, int edgeMargin)
     {
+        bool leavingDirect = Settings.UseDirectDisplayExclusive;
+        Settings.UseDirectDisplayExclusive = false;
         Settings.IsFullScreen = false;
         Settings.WindowPositionPreset = "custom";
         Settings.WindowOffsetX = offsetX;
@@ -461,6 +583,14 @@ public sealed class AppController : IDisposable
         }
 
         _settingsService.Save();
+
+        if (leavingDirect || _displayWindow == null)
+        {
+            _ = RecreateDisplayWindowAsync();
+            RefreshTrayMenu();
+            NotifyStateChanged();
+            return;
+        }
 
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
@@ -1170,7 +1300,7 @@ public sealed class AppController : IDisposable
         {
             RefreshTrayMenu();
             NotifyStateChanged();
-            if (_displayWindow != null)
+            if (_displayWindow != null && !_displayWindow.IsDirectDisplayExclusive)
             {
                 _ = RecreateDisplayWindowAsync();
             }

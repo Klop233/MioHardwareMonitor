@@ -26,7 +26,7 @@ public sealed class TrayManager : IDisposable
         _controller = controller;
         _menuFont = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular);
         _menuBoldFont = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
-        _icon = CreateMioLabIcon();
+        _icon = LoadAppIcon() ?? CreateMioLabIcon();
 
         _menu = new ContextMenuStrip
         {
@@ -146,7 +146,7 @@ public sealed class TrayManager : IDisposable
         bool isDark = string.Equals(s.Theme, "dark", StringComparison.OrdinalIgnoreCase);
 
         // 1. Primary Window Actions
-        var openSettings = new ToolStripMenuItem("打开设置窗口")
+        var openSettings = new ToolStripMenuItem("打开管理面板（设置窗口）")
         {
             Font = _menuBoldFont
         };
@@ -262,9 +262,17 @@ public sealed class TrayManager : IDisposable
         hideBarItem.Click += (_, _) => _controller.UpdateSettings(x => x.HideMonitorTopBar = !x.HideMonitorTopBar);
         _menu.Items.Add(hideBarItem);
 
-        var taskbarItem = new ToolStripMenuItem("在任务栏显示监控窗口") { Checked = s.ShowDisplayInTaskbar };
-        taskbarItem.Click += (_, _) => _controller.SetShowDisplayInTaskbar(!s.ShowDisplayInTaskbar);
-        _menu.Items.Add(taskbarItem);
+        var autoStartItem = new ToolStripMenuItem("开机自动启动（恢复上次模式）") { Checked = _controller.IsAutoStartEnabled };
+        autoStartItem.Click += (_, _) =>
+        {
+            bool next = !_controller.IsAutoStartEnabled;
+            var res = _controller.SetAutoStart(next);
+            if (!res.Success)
+            {
+                ShowBalloon("设置开机自启失败", res.ErrorMessage ?? "请检查系统权限后重试。");
+            }
+        };
+        _menu.Items.Add(autoStartItem);
 
         _menu.Items.Add(new ToolStripSeparator());
 
@@ -461,9 +469,23 @@ public sealed class TrayManager : IDisposable
         }
     }
 
+    private static Icon? LoadAppIcon()
+    {
+        try
+        {
+            var info = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/Assets/app.ico"));
+            if (info?.Stream != null)
+            {
+                using var stream = info.Stream;
+                return new Icon(stream, new Size(32, 32));
+            }
+        }
+        catch { }
+        return null;
+    }
+
     /// <summary>
-    /// Creates a crisp MioLab brand-blue (#2B5FD9) tray icon that stands out cleanly
-    /// on both light and dark Windows taskbars, without leaking GDI HICON handles.
+    /// Fallback MioLab brand-blue (#2B5FD9) tray icon when Assets/app.ico resource is unavailable.
     /// </summary>
     private static Icon CreateMioLabIcon()
     {

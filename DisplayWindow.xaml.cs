@@ -68,7 +68,8 @@ public partial class DisplayWindow : Window
         _isLocked = _isDirectDisplayMode || s.LockWindowPosition;
         _pinAllDesktops = s.PinToAllVirtualDesktops;
         Topmost = !_isDirectDisplayMode && s.AlwaysOnTop;
-        ShowInTaskbar = !_isDirectDisplayMode && !_pinAllDesktops && s.ShowDisplayInTaskbar;
+        // Performance monitor window never occupies the Windows Taskbar; only the management panel stays on taskbar.
+        ShowInTaskbar = false;
 
         LoadingText.Text = _isDirectDisplayMode
             ? $"正在硬件独占屏幕 {directSession!.Descriptor.DisplayName} ({directSession.Width}×{directSession.Height}) 上初始化..."
@@ -121,7 +122,7 @@ public partial class DisplayWindow : Window
             }
             else
             {
-                Win32Interop.ApplyVirtualDesktopPinStyle(hwnd, _pinAllDesktops, _controller.Settings.ShowDisplayInTaskbar, noActivate: false);
+                Win32Interop.ApplyVirtualDesktopPinStyle(hwnd, _pinAllDesktops, showInTaskbar: false, noActivate: false);
             }
         }
 
@@ -358,24 +359,18 @@ public partial class DisplayWindow : Window
 
     public void ApplyShowInTaskbar(bool showInTaskbar)
     {
-        if (_isDirectDisplayMode) return;
-        ShowInTaskbar = !_pinAllDesktops && showInTaskbar;
-        var hwnd = new WindowInteropHelper(this).Handle;
-        if (hwnd != IntPtr.Zero)
-        {
-            Win32Interop.ApplyVirtualDesktopPinStyle(hwnd, _pinAllDesktops, showInTaskbar, noActivate: false);
-        }
+        ShowInTaskbar = false;
     }
 
     public void ApplyPinToAllVirtualDesktops(bool pinAllDesktops)
     {
         if (_isDirectDisplayMode) return;
         _pinAllDesktops = pinAllDesktops;
-        ShowInTaskbar = !pinAllDesktops && _controller.Settings.ShowDisplayInTaskbar;
+        ShowInTaskbar = false;
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd != IntPtr.Zero)
         {
-            Win32Interop.ApplyVirtualDesktopPinStyle(hwnd, pinAllDesktops, _controller.Settings.ShowDisplayInTaskbar, noActivate: false);
+            Win32Interop.ApplyVirtualDesktopPinStyle(hwnd, pinAllDesktops, showInTaskbar: false, noActivate: false);
             EnforceTopMostIfNeeded();
         }
     }

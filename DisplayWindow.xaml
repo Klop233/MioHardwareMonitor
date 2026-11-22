@@ -4,6 +4,8 @@
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="SideScreen HUD - 监控窗口"
+        Icon="pack://application:,,,/Assets/app.ico"
+        ShowInTaskbar="False"
         WindowStartupLocation="Manual"
         Width="1280"
         Height="760"
