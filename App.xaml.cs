@@ -14,6 +14,11 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        if (e.Args.Any(a => a.Equals("--software-wpf", StringComparison.OrdinalIgnoreCase)))
+        {
+            System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+        }
+
         if (e.Args.Any(a => a.Equals("--self-test", StringComparison.OrdinalIgnoreCase)))
         {
             await RunSelfTestAsync();

@@ -15,7 +15,19 @@ public sealed class HardwareMonitorService : IDisposable
     private Computer? _computer;
     private bool _lhmReady;
 
-    // Static hardware info
+    // Static hardware info (supports multi-socket / multi-CPU systems)
+    private sealed class StaticCpuSocket
+    {
+        public int Index;
+        public string DeviceId = "";
+        public string SocketDesignation = "";
+        public string Name = "CPU";
+        public int PhysicalCores;
+        public int LogicalProcessors;
+        public double BaseClockGhz = 3.0;
+    }
+
+    private readonly List<StaticCpuSocket> _cpuSockets = new();
     private string _cpuName = "CPU";
     private int _physicalCores = Environment.ProcessorCount;
     private int _logicalProcessors = Environment.ProcessorCount;
@@ -83,24 +95,60 @@ public sealed class HardwareMonitorService : IDisposable
         // DXGI Adapters (accurate 64-bit VRAM + LUID)
         _dxgiAdapters = DxgiHelper.EnumerateAdapters();
 
-        // CPU info via WMI
+        // CPU info via WMI (enumerate ALL physical CPU sockets for multi-CPU servers/workstations)
+        _cpuSockets.Clear();
         try
         {
-            using var searcher = new ManagementObjectSearcher("SELECT Name, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed FROM Win32_Processor");
+            using var searcher = new ManagementObjectSearcher(
+                "SELECT DeviceID, Name, SocketDesignation, NumberOfCores, NumberOfLogicalProcessors, MaxClockSpeed FROM Win32_Processor");
+            var rawSockets = new List<StaticCpuSocket>();
             foreach (var obj in searcher.Get())
             {
                 var name = obj["Name"]?.ToString()?.Trim();
-                if (!string.IsNullOrWhiteSpace(name))
+                string cleanName = string.IsNullOrWhiteSpace(name) ? "CPU" : CleanHardwareName(name);
+                string devId = obj["DeviceID"]?.ToString()?.Trim() ?? "";
+                string sockDesig = obj["SocketDesignation"]?.ToString()?.Trim() ?? "";
+                int phys = obj["NumberOfCores"] != null ? Convert.ToInt32(obj["NumberOfCores"]) : 0;
+                int logi = obj["NumberOfLogicalProcessors"] != null ? Convert.ToInt32(obj["NumberOfLogicalProcessors"]) : 0;
+                double baseClk = obj["MaxClockSpeed"] != null ? Convert.ToDouble(obj["MaxClockSpeed"]) / 1000.0 : 3.0;
+
+                rawSockets.Add(new StaticCpuSocket
                 {
-                    _cpuName = CleanHardwareName(name);
-                }
-                if (obj["NumberOfCores"] != null) _physicalCores = Convert.ToInt32(obj["NumberOfCores"]);
-                if (obj["NumberOfLogicalProcessors"] != null) _logicalProcessors = Convert.ToInt32(obj["NumberOfLogicalProcessors"]);
-                if (obj["MaxClockSpeed"] != null) _baseClockGhz = Convert.ToDouble(obj["MaxClockSpeed"]) / 1000.0;
-                break;
+                    DeviceId = devId,
+                    SocketDesignation = sockDesig,
+                    Name = cleanName,
+                    PhysicalCores = Math.Max(1, phys),
+                    LogicalProcessors = Math.Max(1, logi),
+                    BaseClockGhz = baseClk > 0.1 ? baseClk : 3.0
+                });
+            }
+
+            rawSockets.Sort((a, b) => string.Compare(a.DeviceId, b.DeviceId, StringComparison.OrdinalIgnoreCase));
+            for (int i = 0; i < rawSockets.Count; i++)
+            {
+                rawSockets[i].Index = i;
+                _cpuSockets.Add(rawSockets[i]);
             }
         }
         catch { }
+
+        if (_cpuSockets.Count == 0)
+        {
+            _cpuSockets.Add(new StaticCpuSocket
+            {
+                Index = 0,
+                DeviceId = "CPU0",
+                Name = "CPU",
+                PhysicalCores = Environment.ProcessorCount,
+                LogicalProcessors = Environment.ProcessorCount,
+                BaseClockGhz = 3.0
+            });
+        }
+
+        _physicalCores = Math.Max(1, _cpuSockets.Sum(s => s.PhysicalCores));
+        _logicalProcessors = Math.Max(Environment.ProcessorCount, _cpuSockets.Sum(s => s.LogicalProcessors));
+        _baseClockGhz = _cpuSockets[0].BaseClockGhz;
+        _cpuName = FormatAggregateCpuName(_cpuSockets.Select(s => s.Name).ToList());
 
         // RAM speed via WMI (optional)
         try
@@ -252,16 +300,18 @@ public sealed class HardwareMonitorService : IDisposable
                 IsElevated = _isElevated
             };
 
-            // 1. Update LibreHardwareMonitor safely
-            var lhmCpu = new LhmCpuData();
+            // 1. Update LibreHardwareMonitor safely (supports multiple CPU sockets & GPUs)
+            var lhmCpus = new List<LhmCpuData>();
             var lhmGpus = new List<LhmGpuData>();
             if (_lhmReady && _computer != null)
             {
-                ReadLibreHardwareMonitor(lhmCpu, lhmGpus);
+                ReadLibreHardwareMonitor(lhmCpus, lhmGpus);
             }
 
-            // 2. CPU
-            snapshot.Cpu = CollectCpu(lhmCpu);
+            // 2. CPU (aggregate + per-socket metrics)
+            var (aggCpu, socketCpus) = CollectCpus(lhmCpus);
+            snapshot.Cpu = aggCpu;
+            snapshot.Cpus = socketCpus;
 
             // 3. Memory
             snapshot.Memory = CollectMemory();
@@ -286,10 +336,13 @@ public sealed class HardwareMonitorService : IDisposable
 
     private sealed class LhmCpuData
     {
+        public string Identifier = "";
+        public string Name = "";
         public double? TempC;
         public double? PowerW;
         public double? AvgClockGhz;
         public double? TotalLoad;
+        public List<double> CoreLoads = new();
     }
 
     private sealed class LhmGpuData
@@ -307,7 +360,7 @@ public sealed class HardwareMonitorService : IDisposable
         public double? VramTotalGb;
     }
 
-    private void ReadLibreHardwareMonitor(LhmCpuData cpuOut, List<LhmGpuData> gpusOut)
+    private void ReadLibreHardwareMonitor(List<LhmCpuData> cpusOut, List<LhmGpuData> gpusOut)
     {
         if (_computer == null) return;
         try
@@ -324,7 +377,13 @@ public sealed class HardwareMonitorService : IDisposable
 
                     if (hw.HardwareType == HardwareType.Cpu)
                     {
+                        var c = new LhmCpuData
+                        {
+                            Identifier = hw.Identifier.ToString(),
+                            Name = CleanHardwareName(hw.Name ?? "")
+                        };
                         var clocks = new List<double>();
+                        var coreLoadPairs = new List<(int Idx, double Val)>();
                         double? pkgTemp = null;
                         double? fallbackTemp = null;
 
@@ -351,7 +410,7 @@ public sealed class HardwareMonitorService : IDisposable
                                     break;
                                 case SensorType.Power:
                                     if (name.Contains("Package", StringComparison.OrdinalIgnoreCase) && val >= 0)
-                                        cpuOut.PowerW = Math.Round(val, 1);
+                                        c.PowerW = Math.Round(val, 1);
                                     break;
                                 case SensorType.Clock:
                                     if (name.Contains("Core", StringComparison.OrdinalIgnoreCase) && val > 200)
@@ -359,16 +418,27 @@ public sealed class HardwareMonitorService : IDisposable
                                     break;
                                 case SensorType.Load:
                                     if (name.Equals("CPU Total", StringComparison.OrdinalIgnoreCase))
-                                        cpuOut.TotalLoad = val;
+                                    {
+                                        c.TotalLoad = val;
+                                    }
+                                    else if (name.StartsWith("CPU Core #", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        coreLoadPairs.Add((s.Index, Math.Round(Math.Clamp(val, 0, 100), 1)));
+                                    }
                                     break;
                             }
                         }
 
-                        cpuOut.TempC = pkgTemp ?? fallbackTemp;
+                        c.TempC = pkgTemp ?? fallbackTemp;
                         if (clocks.Count > 0)
                         {
-                            cpuOut.AvgClockGhz = Math.Round(clocks.Max() / 1000.0, 2);
+                            c.AvgClockGhz = Math.Round(clocks.Max() / 1000.0, 2);
                         }
+                        if (coreLoadPairs.Count > 0)
+                        {
+                            c.CoreLoads = coreLoadPairs.OrderBy(p => p.Idx).Select(p => p.Val).ToList();
+                        }
+                        cpusOut.Add(c);
                     }
                     else if (hw.HardwareType is HardwareType.GpuAmd or HardwareType.GpuNvidia or HardwareType.GpuIntel)
                     {
@@ -441,9 +511,12 @@ public sealed class HardwareMonitorService : IDisposable
         catch { }
     }
 
-    private CpuMetrics CollectCpu(LhmCpuData lhmCpu)
+    private (CpuMetrics Aggregate, List<CpuSocketMetrics> Sockets) CollectCpus(List<LhmCpuData> lhmCpus)
     {
-        double totalUsage = 0;
+        lhmCpus.Sort((a, b) => string.Compare(a.Identifier, b.Identifier, StringComparison.OrdinalIgnoreCase));
+
+        double systemTotalUsage = 0;
+        bool hasSysTimesDelta = false;
 
         if (Win32Interop.GetSystemTimes(out var idleFt, out var kernelFt, out var userFt))
         {
@@ -459,7 +532,8 @@ public sealed class HardwareMonitorService : IDisposable
                 ulong totalDelta = kernelDelta + userDelta;
                 if (totalDelta > 0)
                 {
-                    totalUsage = Math.Clamp((totalDelta - idleDelta) * 100.0 / totalDelta, 0, 100);
+                    systemTotalUsage = Math.Clamp((totalDelta - idleDelta) * 100.0 / totalDelta, 0, 100);
+                    hasSysTimesDelta = true;
                 }
             }
 
@@ -468,56 +542,172 @@ public sealed class HardwareMonitorService : IDisposable
             _prevUser = user;
             _hasCpuTimes = true;
         }
-        else if (lhmCpu.TotalLoad.HasValue)
-        {
-            totalUsage = Math.Clamp(lhmCpu.TotalLoad.Value, 0, 100);
-        }
 
-        // Per-core loads
-        var coreUsages = new double[_coreCounters.Count];
+        // Per-core loads across all processor groups / sockets
+        var allCoreUsages = new double[_coreCounters.Count];
         for (int i = 0; i < _coreCounters.Count; i++)
         {
             try
             {
-                coreUsages[i] = Math.Round(Math.Clamp(_coreCounters[i].NextValue(), 0, 100), 1);
+                allCoreUsages[i] = Math.Round(Math.Clamp(_coreCounters[i].NextValue(), 0, 100), 1);
             }
             catch
             {
-                coreUsages[i] = 0;
+                allCoreUsages[i] = 0;
             }
         }
 
-        // Live CPU clock
-        double clockGhz = _baseClockGhz;
-        if (lhmCpu.AvgClockGhz.HasValue && lhmCpu.AvgClockGhz.Value > 0.4)
-        {
-            clockGhz = lhmCpu.AvgClockGhz.Value;
-        }
-        else if (_cpuPerfPercentCounter != null)
+        // Fallback PDH frequency ratio when MSR clock is unavailable
+        double? pdhPerfRatio = null;
+        if (_cpuPerfPercentCounter != null)
         {
             try
             {
                 double perfPct = _cpuPerfPercentCounter.NextValue();
                 if (perfPct > 10 && perfPct < 400)
-                {
-                    clockGhz = Math.Round(_baseClockGhz * perfPct / 100.0, 2);
-                }
+                    pdhPerfRatio = perfPct / 100.0;
             }
             catch { }
         }
 
-        return new CpuMetrics
+        // Reconcile effective socket list (if WMI saw 1 entry but LHM reports multiple physical CPUs)
+        var effectiveSockets = _cpuSockets;
+        if (effectiveSockets.Count == 1 && lhmCpus.Count > 1)
         {
-            Name = _cpuName,
-            PhysicalCores = _physicalCores,
-            LogicalProcessors = _logicalProcessors,
-            TotalUsagePercent = Math.Round(totalUsage, 1),
-            CurrentClockGhz = Math.Round(clockGhz, 2),
-            BaseClockGhz = Math.Round(_baseClockGhz, 2),
-            TemperatureC = lhmCpu.TempC.HasValue ? Math.Round(lhmCpu.TempC.Value, 1) : null,
-            PowerWatts = lhmCpu.PowerW,
-            CoreUsages = coreUsages
+            int perPhys = Math.Max(1, _physicalCores / lhmCpus.Count);
+            int perLogi = Math.Max(1, _logicalProcessors / lhmCpus.Count);
+            effectiveSockets = new List<StaticCpuSocket>(lhmCpus.Count);
+            for (int i = 0; i < lhmCpus.Count; i++)
+            {
+                effectiveSockets.Add(new StaticCpuSocket
+                {
+                    Index = i,
+                    DeviceId = $"CPU{i}",
+                    SocketDesignation = $"CPU {i + 1}",
+                    Name = !string.IsNullOrWhiteSpace(lhmCpus[i].Name) ? lhmCpus[i].Name : _cpuSockets[0].Name,
+                    PhysicalCores = perPhys,
+                    LogicalProcessors = perLogi,
+                    BaseClockGhz = _cpuSockets[0].BaseClockGhz
+                });
+            }
+        }
+
+        var sockets = new List<CpuSocketMetrics>(effectiveSockets.Count);
+        int coreCursor = 0;
+
+        for (int i = 0; i < effectiveSockets.Count; i++)
+        {
+            var spec = effectiveSockets[i];
+            var lhm = i < lhmCpus.Count ? lhmCpus[i] : null;
+            int startCore = coreCursor;
+
+            double[] socketCores;
+            if (allCoreUsages.Length > 0 && coreCursor < allCoreUsages.Length)
+            {
+                int remaining = allCoreUsages.Length - coreCursor;
+                int take = (i == effectiveSockets.Count - 1)
+                    ? remaining
+                    : Math.Min(spec.LogicalProcessors, remaining);
+                socketCores = new double[take];
+                Array.Copy(allCoreUsages, coreCursor, socketCores, 0, take);
+                coreCursor += take;
+            }
+            else if (lhm != null && lhm.CoreLoads.Count > 0)
+            {
+                socketCores = lhm.CoreLoads.ToArray();
+            }
+            else
+            {
+                socketCores = Array.Empty<double>();
+            }
+
+            double socketUsage;
+            if (effectiveSockets.Count == 1)
+            {
+                socketUsage = hasSysTimesDelta
+                    ? systemTotalUsage
+                    : (lhm?.TotalLoad is > 0 ? Math.Clamp(lhm.TotalLoad.Value, 0, 100) : (socketCores.Length > 0 ? socketCores.Average() : 0));
+            }
+            else
+            {
+                socketUsage = socketCores.Length > 0
+                    ? Math.Clamp(socketCores.Average(), 0, 100)
+                    : (lhm?.TotalLoad.HasValue == true ? Math.Clamp(lhm.TotalLoad.Value, 0, 100) : systemTotalUsage);
+            }
+
+            double socketClock = spec.BaseClockGhz;
+            if (lhm?.AvgClockGhz is > 0.4)
+            {
+                socketClock = lhm.AvgClockGhz.Value;
+            }
+            else if (pdhPerfRatio.HasValue)
+            {
+                socketClock = Math.Round(spec.BaseClockGhz * pdhPerfRatio.Value, 2);
+            }
+
+            string displayName = !string.IsNullOrWhiteSpace(spec.Name) && spec.Name != "CPU"
+                ? spec.Name
+                : (!string.IsNullOrWhiteSpace(lhm?.Name) ? lhm.Name : "CPU");
+
+            sockets.Add(new CpuSocketMetrics
+            {
+                Index = i,
+                Label = $"CPU {i + 1}",
+                SocketDesignation = spec.SocketDesignation,
+                Name = displayName,
+                PhysicalCores = spec.PhysicalCores,
+                LogicalProcessors = socketCores.Length > 0 ? socketCores.Length : spec.LogicalProcessors,
+                StartCoreIndex = startCore,
+                TotalUsagePercent = Math.Round(socketUsage, 1),
+                CurrentClockGhz = Math.Round(socketClock, 2),
+                BaseClockGhz = Math.Round(spec.BaseClockGhz, 2),
+                TemperatureC = lhm?.TempC.HasValue == true ? Math.Round(lhm.TempC.Value, 1) : null,
+                PowerWatts = lhm?.PowerW,
+                CoreUsages = socketCores
+            });
+        }
+
+        // Aggregate summary across all physical CPUs
+        double aggUsage = hasSysTimesDelta
+            ? systemTotalUsage
+            : (sockets.Count > 0 ? sockets.Average(s => s.TotalUsagePercent) : 0);
+
+        double? maxTemp = sockets.Where(s => s.TemperatureC.HasValue).Select(s => s.TemperatureC!.Value).DefaultIfEmpty().Max();
+        bool hasAnyTemp = sockets.Any(s => s.TemperatureC.HasValue);
+
+        bool hasAnyPower = sockets.Any(s => s.PowerWatts.HasValue);
+        double totalPower = sockets.Where(s => s.PowerWatts.HasValue).Sum(s => s.PowerWatts!.Value);
+
+        double aggClock = sockets.Count > 0 ? sockets.Max(s => s.CurrentClockGhz) : _baseClockGhz;
+        double aggBaseClock = sockets.Count > 0 ? sockets[0].BaseClockGhz : _baseClockGhz;
+        double[] combinedCores = allCoreUsages.Length > 0
+            ? allCoreUsages
+            : sockets.SelectMany(s => s.CoreUsages).ToArray();
+
+        var agg = new CpuMetrics
+        {
+            Name = FormatAggregateCpuName(sockets.Select(s => s.Name).ToList()),
+            SocketCount = Math.Max(1, sockets.Count),
+            PhysicalCores = sockets.Sum(s => s.PhysicalCores),
+            LogicalProcessors = Math.Max(combinedCores.Length, sockets.Sum(s => s.LogicalProcessors)),
+            TotalUsagePercent = Math.Round(aggUsage, 1),
+            CurrentClockGhz = Math.Round(aggClock, 2),
+            BaseClockGhz = Math.Round(aggBaseClock, 2),
+            TemperatureC = hasAnyTemp ? Math.Round(maxTemp ?? 0, 1) : null,
+            PowerWatts = hasAnyPower ? Math.Round(totalPower, 1) : null,
+            CoreUsages = combinedCores
         };
+
+        return (agg, sockets);
+    }
+
+    private static string FormatAggregateCpuName(List<string> names)
+    {
+        if (names.Count == 0) return "CPU";
+        if (names.Count == 1) return names[0];
+        var distinct = names.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (distinct.Count == 1) return $"{names.Count} × {distinct[0]}";
+        return string.Join(" + ", distinct);
     }
 
     private MemoryMetrics CollectMemory()

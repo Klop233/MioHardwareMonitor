@@ -37,6 +37,12 @@ public partial class ControlWindow : Window
     private List<MonitorDescriptor> _monitors = new();
     private readonly System.Windows.Controls.Button[] _presetButtons;
     private readonly System.Windows.Controls.Button[] _navButtons;
+    private string _selectedWidgetId = "cpu";
+    private string? _dragWidgetId;
+    private bool _isResizingWidget;
+    private System.Windows.Point _dragStartPt;
+    private int _dragStartCol, _dragStartRow, _dragStartColSpan, _dragStartRowSpan;
+    private bool _dragMutated;
 
     public ControlWindow(AppController controller)
     {
@@ -50,7 +56,7 @@ public partial class ControlWindow : Window
             BtnPresetBottomLeft, BtnPresetBottomHalf, BtnPresetBottomRight
         };
 
-        _navButtons = new[] { BtnNavWindow, BtnNavMonitor, BtnNavMarket };
+        _navButtons = new[] { BtnNavWindow, BtnNavMonitor, BtnNavLayout, BtnNavMarket };
 
         PopulateFxCurrencyCombos();
         ApplyThemeResources(_controller.Settings.Theme);
@@ -220,6 +226,7 @@ public partial class ControlWindow : Window
 
         PanelWindow.Visibility = tab == "window" ? Visibility.Visible : Visibility.Collapsed;
         PanelMonitor.Visibility = tab == "monitor" ? Visibility.Visible : Visibility.Collapsed;
+        PanelLayout.Visibility = tab == "layout" ? Visibility.Visible : Visibility.Collapsed;
         PanelMarket.Visibility = tab == "market" ? Visibility.Visible : Visibility.Collapsed;
 
         var normalStyle = (Style)FindResource("NavButton");
@@ -227,6 +234,11 @@ public partial class ControlWindow : Window
         foreach (var b in _navButtons)
         {
             b.Style = ReferenceEquals(b, btn) ? activeStyle : normalStyle;
+        }
+
+        if (tab == "layout")
+        {
+            Dispatcher.BeginInvoke(RenderLayoutCanvas, System.Windows.Threading.DispatcherPriority.Loaded);
         }
     }
 
@@ -356,6 +368,8 @@ public partial class ControlWindow : Window
             SelectComboByTag(ComboInterval, s.TelemetryIntervalMs.ToString());
             SelectComboByTag(ComboCpuView, s.CpuViewMode ?? "cores");
             SelectComboByTag(ComboProcSort, s.ProcessSortBy ?? "cpu");
+            RefreshCpuDisplayTargetCombo(s);
+            RefreshLayoutEditorUi(s);
 
             // Network IP readout
             var netIp = _controller.LastNetworkIp;
@@ -639,6 +653,545 @@ public partial class ControlWindow : Window
             s.CpuViewMode = cpuView;
             s.ProcessSortBy = procSort;
         });
+    }
+
+    private void RefreshCpuDisplayTargetCombo(AppSettings s)
+    {
+        var snap = _controller.LastTelemetry;
+        var cpus = snap?.Cpus;
+        int sockCount = cpus != null && cpus.Count > 0 ? cpus.Count : (snap?.Cpu.SocketCount ?? 1);
+
+        if (snap != null)
+        {
+            TxtCpuTopologyInfo.Text = sockCount > 1
+                ? $"检测到 {sockCount} 颗物理 CPU · {snap.Cpu.PhysicalCores} 核 {snap.Cpu.LogicalProcessors} 线程"
+                : $"检测到 1 颗物理 CPU · {snap.Cpu.PhysicalCores} 核 {snap.Cpu.LogicalProcessors} 线程";
+        }
+        else
+        {
+            TxtCpuTopologyInfo.Text = "正在读取处理器拓扑";
+        }
+
+        ComboCpuDisplayTarget.Items.Clear();
+        ComboCpuDisplayTarget.Items.Add(new ComboBoxItem { Tag = "auto", Content = "自动（多 CPU 分路展示，单 CPU 标准展示）" });
+        ComboCpuDisplayTarget.Items.Add(new ComboBoxItem { Tag = "all", Content = "分路独立展示全部 CPU" });
+        ComboCpuDisplayTarget.Items.Add(new ComboBoxItem { Tag = "combined", Content = "全部 CPU 合并为总览视图" });
+
+        if (cpus != null && cpus.Count > 1)
+        {
+            foreach (var c in cpus)
+            {
+                ComboCpuDisplayTarget.Items.Add(new ComboBoxItem
+                {
+                    Tag = c.Index.ToString(),
+                    Content = $"仅聚焦 {c.Label}（{c.Name} · {c.PhysicalCores}核/{c.LogicalProcessors}线）"
+                });
+            }
+        }
+
+        SelectComboByTag(ComboCpuDisplayTarget, SettingsService.NormalizeCpuDisplayTarget(s.CpuDisplayTarget));
+    }
+
+    private void ComboCpuDisplayTarget_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        string target = GetSelectedTag(ComboCpuDisplayTarget, "auto");
+        _controller.UpdateSettings(s => s.CpuDisplayTarget = target);
+    }
+
+    // ==================== CUSTOM LAYOUT EDITOR ====================
+
+    private void RefreshLayoutEditorUi(AppSettings s)
+    {
+        var layout = SettingsService.NormalizeCustomLayout(s.CustomLayout);
+        bool isCustomActive = string.Equals(s.LayoutMode, "custom", StringComparison.OrdinalIgnoreCase);
+
+        if (isCustomActive)
+        {
+            LayoutActiveBadge.SetResourceReference(Border.BackgroundProperty, "SuccessSubtle");
+            LayoutActiveBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            LayoutActiveBadgeText.Text = "已启用自定义排版";
+            BtnActivateCustomLayout.Content = "已启用自定义排版";
+            BtnActivateCustomLayout.IsEnabled = false;
+        }
+        else
+        {
+            LayoutActiveBadge.SetResourceReference(Border.BackgroundProperty, "BorderToken");
+            LayoutActiveBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            LayoutActiveBadgeText.Text = "当前为内置布局";
+            BtnActivateCustomLayout.Content = "启用自定义排版";
+            BtnActivateCustomLayout.IsEnabled = true;
+        }
+
+        SelectComboByTag(ComboGridCols, layout.Columns.ToString());
+        SelectComboByTag(ComboGridRows, layout.Rows.ToString());
+        SelectComboByTag(ComboGridGap, layout.GapPx.ToString());
+
+        var selected = layout.Widgets.FirstOrDefault(w => string.Equals(w.Id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase))
+                       ?? layout.Widgets.FirstOrDefault();
+        if (selected != null)
+        {
+            _selectedWidgetId = selected.Id;
+            TxtSelectedWidgetTitle.Text = $"选中：{CustomLayoutConfig.GetWidgetTitle(selected.Id)}";
+            ChkSelectedWidgetVisible.IsChecked = selected.Visible;
+            TxtWidgetCol.Text = selected.Col.ToString();
+            TxtWidgetRow.Text = selected.Row.ToString();
+            TxtWidgetColSpan.Text = selected.ColSpan.ToString();
+            TxtWidgetRowSpan.Text = selected.RowSpan.ToString();
+        }
+
+        // Rebuild compact 3x3 module toggle chips
+        LayoutModulesGrid.Children.Clear();
+        foreach (var (id, _, shortTitle) in CustomLayoutConfig.AllWidgets)
+        {
+            var widget = layout.Widgets.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.OrdinalIgnoreCase));
+            bool isVisible = widget?.Visible ?? true;
+            bool isSelected = string.Equals(id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase);
+
+            var chip = new Border
+            {
+                CornerRadius = new CornerRadius(4),
+                BorderThickness = new Thickness(1),
+                Margin = new Thickness(2),
+                Padding = new Thickness(6, 4, 6, 4),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            chip.SetResourceReference(Border.BackgroundProperty, isSelected ? "AccentSubtle" : "BgPage");
+            chip.SetResourceReference(Border.BorderBrushProperty, isSelected ? "Accent" : "BorderToken");
+
+            var rowPanel = new StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var chk = new System.Windows.Controls.CheckBox
+            {
+                IsChecked = isVisible,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 4, 0),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            string capturedId = id;
+            chk.Click += (_, ev) =>
+            {
+                ev.Handled = true;
+                ToggleWidgetVisibility(capturedId, chk.IsChecked == true);
+            };
+
+            var lbl = new TextBlock
+            {
+                Text = shortTitle,
+                FontSize = 14,
+                FontWeight = isSelected ? FontWeights.Medium : FontWeights.Normal,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            lbl.SetResourceReference(TextBlock.ForegroundProperty, isSelected ? "AccentText" : (isVisible ? "TextMain" : "TextMuted"));
+
+            rowPanel.Children.Add(chk);
+            rowPanel.Children.Add(lbl);
+            chip.Child = rowPanel;
+            chip.MouseLeftButtonDown += (_, _) =>
+            {
+                _selectedWidgetId = capturedId;
+                _suppressEvents = true;
+                try { RefreshLayoutEditorUi(_controller.Settings); }
+                finally { _suppressEvents = false; }
+            };
+
+            LayoutModulesGrid.Children.Add(chip);
+        }
+
+        RenderLayoutCanvas();
+    }
+
+    private void RenderLayoutCanvas()
+    {
+        if (LayoutEditorCanvas == null) return;
+        LayoutEditorCanvas.Children.Clear();
+
+        double canvasW = LayoutEditorCanvas.ActualWidth > 40 ? LayoutEditorCanvas.ActualWidth : 460;
+        double canvasH = LayoutEditorCanvas.ActualHeight > 40 ? LayoutEditorCanvas.ActualHeight : 296;
+        var layout = SettingsService.NormalizeCustomLayout(_controller.Settings.CustomLayout);
+
+        int cols = layout.Columns;
+        int rows = layout.Rows;
+        double cellW = canvasW / cols;
+        double cellH = canvasH / rows;
+
+        // 1. Background grid cells
+        for (int r = 0; r < rows; r++)
+        {
+            for (int c = 0; c < cols; c++)
+            {
+                var cell = new Border
+                {
+                    Width = Math.Max(2, cellW - 2),
+                    Height = Math.Max(2, cellH - 2),
+                    BorderThickness = new Thickness(0.5),
+                    CornerRadius = new CornerRadius(2),
+                    IsHitTestVisible = false,
+                    Opacity = 0.6
+                };
+                cell.SetResourceReference(Border.BorderBrushProperty, "BorderToken");
+                Canvas.SetLeft(cell, c * cellW + 1);
+                Canvas.SetTop(cell, r * cellH + 1);
+                LayoutEditorCanvas.Children.Add(cell);
+            }
+        }
+
+        // 2. Visible widget tiles
+        var visibleWidgets = layout.Widgets.Where(w => w.Visible).ToList();
+        foreach (var w in visibleWidgets)
+        {
+            bool isSelected = string.Equals(w.Id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase);
+            bool overlaps = HasWidgetOverlap(visibleWidgets, w);
+
+            double x = (w.Col - 1) * cellW + 2;
+            double y = (w.Row - 1) * cellH + 2;
+            double tileW = Math.Max(24, w.ColSpan * cellW - 4);
+            double tileH = Math.Max(22, w.RowSpan * cellH - 4);
+
+            var tile = new Border
+            {
+                Width = tileW,
+                Height = tileH,
+                CornerRadius = new CornerRadius(6),
+                BorderThickness = new Thickness(isSelected ? 2 : 1),
+                Cursor = System.Windows.Input.Cursors.SizeAll
+            };
+
+            if (overlaps)
+            {
+                tile.SetResourceReference(Border.BackgroundProperty, "DangerSubtle");
+                tile.SetResourceReference(Border.BorderBrushProperty, "Danger");
+            }
+            else if (isSelected)
+            {
+                tile.SetResourceReference(Border.BackgroundProperty, "AccentSubtle");
+                tile.SetResourceReference(Border.BorderBrushProperty, "Accent");
+            }
+            else
+            {
+                tile.SetResourceReference(Border.BackgroundProperty, "BgSurface");
+                tile.SetResourceReference(Border.BorderBrushProperty, "BorderStrong");
+            }
+
+            var grid = new Grid();
+            var infoStack = new StackPanel
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                Margin = new Thickness(6, 2, 6, 2),
+                IsHitTestVisible = false
+            };
+
+            string shortTitle = CustomLayoutConfig.AllWidgets.FirstOrDefault(a => a.Id == w.Id).ShortTitle ?? w.Id;
+            var titleTb = new TextBlock
+            {
+                Text = tileW >= 120 ? CustomLayoutConfig.GetWidgetTitle(w.Id) : shortTitle,
+                FontSize = 14,
+                FontWeight = isSelected ? FontWeights.Bold : FontWeights.Medium,
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
+            };
+            titleTb.SetResourceReference(TextBlock.ForegroundProperty, overlaps ? "Danger" : (isSelected ? "AccentText" : "TextMain"));
+            infoStack.Children.Add(titleTb);
+
+            if (tileH >= 50)
+            {
+                var dimTb = new TextBlock
+                {
+                    Text = overlaps ? $"{w.ColSpan}×{w.RowSpan} · 重叠" : $"{w.ColSpan}×{w.RowSpan}",
+                    FontFamily = new System.Windows.Media.FontFamily("JetBrains Mono, Consolas"),
+                    FontSize = 14,
+                    HorizontalAlignment = System.Windows.HorizontalAlignment.Center
+                };
+                dimTb.SetResourceReference(TextBlock.ForegroundProperty, overlaps ? "Danger" : "TextMuted");
+                infoStack.Children.Add(dimTb);
+            }
+            grid.Children.Add(infoStack);
+
+            // Bottom-right resize grip handle
+            var handle = new Border
+            {
+                Width = 14,
+                Height = 14,
+                CornerRadius = new CornerRadius(3),
+                HorizontalAlignment = System.Windows.HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 3, 3),
+                Cursor = System.Windows.Input.Cursors.SizeNWSE,
+                ToolTip = "拖动缩放此卡片占用的行列数"
+            };
+            handle.SetResourceReference(Border.BackgroundProperty, isSelected ? "Accent" : "BorderStrong");
+            handle.Opacity = isSelected ? 1.0 : 0.45;
+
+            string capturedId = w.Id;
+            handle.MouseLeftButtonDown += (_, ev) =>
+            {
+                ev.Handled = true;
+                StartWidgetDrag(capturedId, isResize: true, ev.GetPosition(LayoutEditorCanvas));
+            };
+            grid.Children.Add(handle);
+
+            tile.Child = grid;
+            tile.MouseLeftButtonDown += (_, ev) =>
+            {
+                ev.Handled = true;
+                StartWidgetDrag(capturedId, isResize: false, ev.GetPosition(LayoutEditorCanvas));
+            };
+
+            Canvas.SetLeft(tile, x);
+            Canvas.SetTop(tile, y);
+            System.Windows.Controls.Panel.SetZIndex(tile, isSelected ? 10 : 1);
+            LayoutEditorCanvas.Children.Add(tile);
+        }
+    }
+
+    private void StartWidgetDrag(string widgetId, bool isResize, System.Windows.Point startPt)
+    {
+        var layout = _controller.Settings.CustomLayout;
+        var w = layout.Widgets.FirstOrDefault(x => string.Equals(x.Id, widgetId, StringComparison.OrdinalIgnoreCase));
+        if (w == null) return;
+
+        _selectedWidgetId = w.Id;
+        _dragWidgetId = w.Id;
+        _isResizingWidget = isResize;
+        _dragStartPt = startPt;
+        _dragStartCol = w.Col;
+        _dragStartRow = w.Row;
+        _dragStartColSpan = w.ColSpan;
+        _dragStartRowSpan = w.RowSpan;
+        _dragMutated = false;
+
+        LayoutEditorCanvas.CaptureMouse();
+        _suppressEvents = true;
+        try { RefreshLayoutEditorUi(_controller.Settings); }
+        finally { _suppressEvents = false; }
+    }
+
+    private void LayoutEditorCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (PanelLayout.Visibility == Visibility.Visible)
+        {
+            RenderLayoutCanvas();
+        }
+    }
+
+    private void LayoutEditorCanvas_MouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_dragWidgetId) || e.LeftButton != MouseButtonState.Pressed) return;
+
+        var layout = _controller.Settings.CustomLayout;
+        var w = layout.Widgets.FirstOrDefault(x => string.Equals(x.Id, _dragWidgetId, StringComparison.OrdinalIgnoreCase));
+        if (w == null) return;
+
+        double canvasW = LayoutEditorCanvas.ActualWidth > 40 ? LayoutEditorCanvas.ActualWidth : 460;
+        double canvasH = LayoutEditorCanvas.ActualHeight > 40 ? LayoutEditorCanvas.ActualHeight : 296;
+        double cellW = canvasW / layout.Columns;
+        double cellH = canvasH / layout.Rows;
+
+        var cur = e.GetPosition(LayoutEditorCanvas);
+        int dCol = (int)Math.Round((cur.X - _dragStartPt.X) / cellW);
+        int dRow = (int)Math.Round((cur.Y - _dragStartPt.Y) / cellH);
+
+        int newCol = w.Col;
+        int newRow = w.Row;
+        int newColSpan = w.ColSpan;
+        int newRowSpan = w.RowSpan;
+
+        if (_isResizingWidget)
+        {
+            newColSpan = Math.Clamp(_dragStartColSpan + dCol, 1, layout.Columns - _dragStartCol + 1);
+            newRowSpan = Math.Clamp(_dragStartRowSpan + dRow, 1, layout.Rows - _dragStartRow + 1);
+        }
+        else
+        {
+            newCol = Math.Clamp(_dragStartCol + dCol, 1, layout.Columns - _dragStartColSpan + 1);
+            newRow = Math.Clamp(_dragStartRow + dRow, 1, layout.Rows - _dragStartRowSpan + 1);
+        }
+
+        if (newCol != w.Col || newRow != w.Row || newColSpan != w.ColSpan || newRowSpan != w.RowSpan)
+        {
+            w.Col = newCol;
+            w.Row = newRow;
+            w.ColSpan = newColSpan;
+            w.RowSpan = newRowSpan;
+            _dragMutated = true;
+
+            TxtWidgetCol.Text = w.Col.ToString();
+            TxtWidgetRow.Text = w.Row.ToString();
+            TxtWidgetColSpan.Text = w.ColSpan.ToString();
+            TxtWidgetRowSpan.Text = w.RowSpan.ToString();
+            RenderLayoutCanvas();
+
+            // Push live visual preview to DisplayWindow when custom mode is active
+            if (string.Equals(_controller.Settings.LayoutMode, "custom", StringComparison.OrdinalIgnoreCase))
+            {
+                _controller.UpdateCustomLayout(layout.Clone(), activateCustomMode: true);
+            }
+        }
+    }
+
+    private void LayoutEditorCanvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (string.IsNullOrEmpty(_dragWidgetId)) return;
+        _dragWidgetId = null;
+        LayoutEditorCanvas.ReleaseMouseCapture();
+
+        if (_dragMutated)
+        {
+            _dragMutated = false;
+            _controller.UpdateCustomLayout(_controller.Settings.CustomLayout.Clone(), activateCustomMode: true);
+        }
+    }
+
+    private static bool HasWidgetOverlap(List<DashboardWidgetLayout> visible, DashboardWidgetLayout target)
+    {
+        int ax1 = target.Col, ay1 = target.Row;
+        int ax2 = target.Col + target.ColSpan - 1, ay2 = target.Row + target.RowSpan - 1;
+        foreach (var other in visible)
+        {
+            if (ReferenceEquals(other, target)) continue;
+            int bx1 = other.Col, by1 = other.Row;
+            int bx2 = other.Col + other.ColSpan - 1, by2 = other.Row + other.RowSpan - 1;
+            if (ax1 <= bx2 && ax2 >= bx1 && ay1 <= by2 && ay2 >= by1)
+                return true;
+        }
+        return false;
+    }
+
+    private void ToggleWidgetVisibility(string widgetId, bool visible)
+    {
+        var layout = _controller.Settings.CustomLayout.Clone();
+        var w = layout.Widgets.FirstOrDefault(x => string.Equals(x.Id, widgetId, StringComparison.OrdinalIgnoreCase));
+        if (w == null) return;
+
+        w.Visible = visible;
+        _selectedWidgetId = w.Id;
+
+        if (visible)
+        {
+            var others = layout.Widgets.Where(x => x.Visible && !ReferenceEquals(x, w)).ToList();
+            if (HasWidgetOverlap(others.Append(w).ToList(), w))
+            {
+                TryFindFreeSlot(layout, others, w);
+            }
+        }
+
+        _controller.UpdateCustomLayout(layout, activateCustomMode: true);
+    }
+
+    private static void TryFindFreeSlot(CustomLayoutConfig layout, List<DashboardWidgetLayout> occupied, DashboardWidgetLayout target)
+    {
+        for (int r = 1; r <= layout.Rows - target.RowSpan + 1; r++)
+        {
+            for (int c = 1; c <= layout.Columns - target.ColSpan + 1; c++)
+            {
+                target.Col = c;
+                target.Row = r;
+                if (!HasWidgetOverlap(occupied.Append(target).ToList(), target))
+                    return;
+            }
+        }
+    }
+
+    private void BtnLayoutPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string preset) return;
+        var next = CustomLayoutConfig.CreatePreset(preset);
+        _controller.UpdateCustomLayout(next, activateCustomMode: true);
+    }
+
+    private void BtnLayoutAutoPack_Click(object sender, RoutedEventArgs e)
+    {
+        var layout = _controller.Settings.CustomLayout.Clone();
+        var visible = layout.Widgets
+            .Where(w => w.Visible)
+            .OrderBy(w => w.Row)
+            .ThenBy(w => w.Col)
+            .ToList();
+
+        var placed = new List<DashboardWidgetLayout>();
+        foreach (var w in visible)
+        {
+            w.ColSpan = Math.Clamp(w.ColSpan, 1, layout.Columns);
+            w.RowSpan = Math.Clamp(w.RowSpan, 1, layout.Rows);
+            bool found = false;
+            for (int r = 1; r <= layout.Rows - w.RowSpan + 1 && !found; r++)
+            {
+                for (int c = 1; c <= layout.Columns - w.ColSpan + 1 && !found; c++)
+                {
+                    w.Col = c;
+                    w.Row = r;
+                    if (!HasWidgetOverlap(placed.Append(w).ToList(), w))
+                    {
+                        found = true;
+                    }
+                }
+            }
+            if (!found && layout.Rows < 12)
+            {
+                int nextRow = placed.Count > 0 ? placed.Max(p => p.Row + p.RowSpan) : 1;
+                layout.Rows = Math.Clamp(nextRow + w.RowSpan - 1, layout.Rows, 12);
+                w.Col = 1;
+                w.Row = Math.Clamp(nextRow, 1, layout.Rows - w.RowSpan + 1);
+            }
+            placed.Add(w);
+        }
+
+        _controller.UpdateCustomLayout(layout, activateCustomMode: true);
+    }
+
+    private void BtnLayoutReset_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.UpdateCustomLayout(CustomLayoutConfig.CreatePreset("split"), activateCustomMode: true);
+    }
+
+    private void BtnActivateCustomLayout_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.UpdateSettings(s => s.LayoutMode = "custom");
+    }
+
+    private void ComboGridConfig_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        var layout = _controller.Settings.CustomLayout.Clone();
+        if (int.TryParse(GetSelectedTag(ComboGridCols, "12"), out int cols)) layout.Columns = cols;
+        if (int.TryParse(GetSelectedTag(ComboGridRows, "8"), out int rows)) layout.Rows = rows;
+        if (int.TryParse(GetSelectedTag(ComboGridGap, "12"), out int gap)) layout.GapPx = gap;
+        _controller.UpdateCustomLayout(layout, activateCustomMode: true);
+    }
+
+    private void ChkSelectedWidgetVisible_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        ToggleWidgetVisibility(_selectedWidgetId, ChkSelectedWidgetVisible.IsChecked == true);
+    }
+
+    private void BtnWidgetStep_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string raw) return;
+        var parts = raw.Split(',');
+        if (parts.Length != 2 || !int.TryParse(parts[1], out int delta)) return;
+
+        var layout = _controller.Settings.CustomLayout.Clone();
+        var w = layout.Widgets.FirstOrDefault(x => string.Equals(x.Id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase));
+        if (w == null) return;
+
+        switch (parts[0])
+        {
+            case "col":
+                w.Col = Math.Clamp(w.Col + delta, 1, layout.Columns - w.ColSpan + 1);
+                break;
+            case "row":
+                w.Row = Math.Clamp(w.Row + delta, 1, layout.Rows - w.RowSpan + 1);
+                break;
+            case "colSpan":
+                w.ColSpan = Math.Clamp(w.ColSpan + delta, 1, layout.Columns - w.Col + 1);
+                break;
+            case "rowSpan":
+                w.RowSpan = Math.Clamp(w.RowSpan + delta, 1, layout.Rows - w.Row + 1);
+                break;
+        }
+
+        _controller.UpdateCustomLayout(layout, activateCustomMode: true);
     }
 
     private void ChkOption_Changed(object sender, RoutedEventArgs e)

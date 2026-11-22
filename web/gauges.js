@@ -36,8 +36,24 @@ export class CpuCoreGridChart {
     this._ro.observe(canvas);
   }
 
+  dispose() {
+    try { this._ro.disconnect(); } catch {}
+    if (this._onMoveBound) this.canvas.removeEventListener('mousemove', this._onMoveBound);
+    if (this._onLeaveBound) this.canvas.removeEventListener('mouseleave', this._onLeaveBound);
+  }
+
+  hydrateCoreArrays(coreArrays) {
+    if (!Array.isArray(coreArrays)) return;
+    for (const arr of coreArrays) {
+      if (Array.isArray(arr) && arr.length > 0) {
+        this.push(arr, false);
+      }
+    }
+    this.draw();
+  }
+
   _bindEvents() {
-    this.canvas.addEventListener('mousemove', (e) => {
+    this._onMoveBound = (e) => {
       const rect = this.canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -54,15 +70,18 @@ export class CpuCoreGridChart {
         this.draw();
         this._emitHover();
       }
-    });
+    };
 
-    this.canvas.addEventListener('mouseleave', () => {
+    this._onLeaveBound = () => {
       if (this.hoverIndex !== -1) {
         this.hoverIndex = -1;
         this.draw();
         this._emitHover();
       }
-    });
+    };
+
+    this.canvas.addEventListener('mousemove', this._onMoveBound);
+    this.canvas.addEventListener('mouseleave', this._onLeaveBound);
   }
 
   _emitHover() {
@@ -297,6 +316,10 @@ export class SparklineChart {
 
     this._ro = new ResizeObserver(() => this.draw());
     this._ro.observe(canvas);
+  }
+
+  dispose() {
+    try { this._ro.disconnect(); } catch {}
   }
 
   push(values) {

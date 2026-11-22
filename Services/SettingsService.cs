@@ -42,8 +42,11 @@ public sealed class SettingsService
                     parsed.WindowHeight = Math.Clamp(parsed.WindowHeight, 300, 4320);
                     parsed.WindowPositionPreset = NormalizePositionPreset(parsed.WindowPositionPreset);
                     parsed.Theme = NormalizeTheme(parsed.Theme);
+                    parsed.LayoutMode = NormalizeLayoutMode(parsed.LayoutMode);
                     parsed.CpuViewMode = string.Equals(parsed.CpuViewMode, "overall", StringComparison.OrdinalIgnoreCase) ? "overall" : "cores";
+                    parsed.CpuDisplayTarget = NormalizeCpuDisplayTarget(parsed.CpuDisplayTarget);
                     parsed.ProcessSortBy = string.Equals(parsed.ProcessSortBy, "mem", StringComparison.OrdinalIgnoreCase) ? "mem" : "cpu";
+                    parsed.CustomLayout = NormalizeCustomLayout(parsed.CustomLayout);
                     if (parsed.FxAmount < 0 || double.IsNaN(parsed.FxAmount) || double.IsInfinity(parsed.FxAmount)) parsed.FxAmount = 100;
                     if (string.IsNullOrWhiteSpace(parsed.FxFromCurrency)) parsed.FxFromCurrency = "USD";
                     if (string.IsNullOrWhiteSpace(parsed.FxToCurrency)) parsed.FxToCurrency = "CNY";
@@ -79,6 +82,71 @@ public sealed class SettingsService
 
     public static string NormalizeTheme(string? theme) =>
         string.Equals(theme?.Trim(), "dark", StringComparison.OrdinalIgnoreCase) ? "dark" : "light";
+
+    public static string NormalizeLayoutMode(string? mode) => (mode ?? "split").Trim().ToLowerInvariant() switch
+    {
+        "hardware" => "hardware",
+        "market" => "market",
+        "custom" => "custom",
+        _ => "split"
+    };
+
+    public static string NormalizeCpuDisplayTarget(string? target)
+    {
+        string raw = (target ?? "auto").Trim().ToLowerInvariant();
+        if (raw is "auto" or "all" or "combined") return raw;
+        if (int.TryParse(raw, out int idx) && idx >= 0 && idx <= 15) return idx.ToString();
+        return "auto";
+    }
+
+    public static CustomLayoutConfig NormalizeCustomLayout(CustomLayoutConfig? layout)
+    {
+        var fallback = CustomLayoutConfig.CreatePreset("split");
+        if (layout == null || layout.Widgets == null || layout.Widgets.Count == 0)
+            return fallback;
+
+        int cols = Math.Clamp(layout.Columns, 4, 16);
+        int rows = Math.Clamp(layout.Rows, 2, 16);
+        int gap = Math.Clamp(layout.GapPx, 4, 24);
+
+        var byId = new Dictionary<string, DashboardWidgetLayout>(StringComparer.OrdinalIgnoreCase);
+        foreach (var w in layout.Widgets)
+        {
+            if (string.IsNullOrWhiteSpace(w.Id)) continue;
+            byId[w.Id.Trim().ToLowerInvariant()] = w;
+        }
+
+        var normalized = new List<DashboardWidgetLayout>();
+        foreach (var (id, _, _) in CustomLayoutConfig.AllWidgets)
+        {
+            var src = byId.TryGetValue(id, out var found)
+                ? found
+                : fallback.Widgets.First(x => x.Id == id);
+
+            int colSpan = Math.Clamp(src.ColSpan, 1, cols);
+            int rowSpan = Math.Clamp(src.RowSpan, 1, rows);
+            int col = Math.Clamp(src.Col, 1, Math.Max(1, cols - colSpan + 1));
+            int row = Math.Clamp(src.Row, 1, Math.Max(1, rows - rowSpan + 1));
+
+            normalized.Add(new DashboardWidgetLayout
+            {
+                Id = id,
+                Visible = src.Visible,
+                Col = col,
+                Row = row,
+                ColSpan = colSpan,
+                RowSpan = rowSpan
+            });
+        }
+
+        return new CustomLayoutConfig
+        {
+            Columns = cols,
+            Rows = rows,
+            GapPx = gap,
+            Widgets = normalized
+        };
+    }
 
     public static string NormalizePositionPreset(string? preset) => (preset ?? "custom").Trim().ToLowerInvariant() switch
     {

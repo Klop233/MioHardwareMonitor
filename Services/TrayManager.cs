@@ -75,7 +75,10 @@ public sealed class TrayManager : IDisposable
         if (_disposed || _trayIcon == null) return;
         try
         {
-            string text = $"星澪监控 · CPU {Math.Round(snap.Cpu.TotalUsagePercent)}% · GPU {Math.Round(snap.Gpu.UsagePercent)}% · 内存 {Math.Round(snap.Memory.UsagePercent)}%";
+            string cpuText = snap.Cpus != null && snap.Cpus.Count > 1
+                ? string.Join(" · ", snap.Cpus.Take(2).Select(c => $"CPU{c.Index + 1} {Math.Round(c.TotalUsagePercent)}%"))
+                : $"CPU {Math.Round(snap.Cpu.TotalUsagePercent)}%";
+            string text = $"星澪监控 · {cpuText} · GPU {Math.Round(snap.Gpu.UsagePercent)}% · 内存 {Math.Round(snap.Memory.UsagePercent)}%";
             if (text.Length > 63) text = text[..63];
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
             {
@@ -246,6 +249,7 @@ public sealed class TrayManager : IDisposable
         AddRadioOption(layoutMenu, "综合看板（性能 + K 线）", s.LayoutMode == "split", () => _controller.UpdateSettings(x => x.LayoutMode = "split"));
         AddRadioOption(layoutMenu, "性能专注模式", s.LayoutMode == "hardware", () => _controller.UpdateSettings(x => x.LayoutMode = "hardware"));
         AddRadioOption(layoutMenu, "行情专注模式", s.LayoutMode == "market", () => _controller.UpdateSettings(x => x.LayoutMode = "market"));
+        AddRadioOption(layoutMenu, "自定义排版", s.LayoutMode == "custom", () => _controller.UpdateSettings(x => x.LayoutMode = "custom"));
         _menu.Items.Add(layoutMenu);
 
         var themeMenu = new ToolStripMenuItem("界面主题");
@@ -256,6 +260,26 @@ public sealed class TrayManager : IDisposable
         var hwMenu = new ToolStripMenuItem("硬件监控设置");
         AddRadioOption(hwMenu, "CPU：所有逻辑处理器（任务管理器）", s.CpuViewMode != "overall", () => _controller.UpdateSettings(x => x.CpuViewMode = "cores"));
         AddRadioOption(hwMenu, "CPU：总体利用率曲线", s.CpuViewMode == "overall", () => _controller.UpdateSettings(x => x.CpuViewMode = "overall"));
+        hwMenu.DropDownItems.Add(new ToolStripSeparator());
+
+        var cpuTargetMenu = new ToolStripMenuItem("多路 CPU 显示方式");
+        string curTarget = SettingsService.NormalizeCpuDisplayTarget(s.CpuDisplayTarget);
+        AddRadioOption(cpuTargetMenu, "自动（多 CPU 分路展示）", curTarget == "auto", () => _controller.UpdateSettings(x => x.CpuDisplayTarget = "auto"));
+        AddRadioOption(cpuTargetMenu, "分路展示全部 CPU", curTarget == "all", () => _controller.UpdateSettings(x => x.CpuDisplayTarget = "all"));
+        AddRadioOption(cpuTargetMenu, "合并为总览视图", curTarget == "combined", () => _controller.UpdateSettings(x => x.CpuDisplayTarget = "combined"));
+        var detectedCpus = _controller.LastTelemetry?.Cpus;
+        if (detectedCpus != null && detectedCpus.Count > 1)
+        {
+            cpuTargetMenu.DropDownItems.Add(new ToolStripSeparator());
+            foreach (var cpuSock in detectedCpus)
+            {
+                string idxTag = cpuSock.Index.ToString();
+                AddRadioOption(cpuTargetMenu, $"仅显示 {cpuSock.Label}（{cpuSock.PhysicalCores}核/{cpuSock.LogicalProcessors}线程）", curTarget == idxTag,
+                    () => _controller.UpdateSettings(x => x.CpuDisplayTarget = idxTag));
+            }
+        }
+        hwMenu.DropDownItems.Add(cpuTargetMenu);
+
         hwMenu.DropDownItems.Add(new ToolStripSeparator());
         AddRadioOption(hwMenu, "进程：按 CPU 占用排序", s.ProcessSortBy != "mem", () => _controller.UpdateSettings(x => x.ProcessSortBy = "cpu"));
         AddRadioOption(hwMenu, "进程：按内存占用排序", s.ProcessSortBy == "mem", () => _controller.UpdateSettings(x => x.ProcessSortBy = "mem"));

@@ -458,6 +458,7 @@
                         <TextBlock Text="所有设置项" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" Margin="12,0,0,8" />
                         <Button x:Name="BtnNavWindow" Content="窗口与固定位置" Tag="window" Style="{StaticResource ActiveNavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavMonitor" Content="外观与硬件监控" Tag="monitor" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
+                        <Button x:Name="BtnNavLayout" Content="自定义排版" Tag="layout" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavMarket" Content="行情、K 线与标的" Tag="market" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                     </StackPanel>
                 </DockPanel>
@@ -626,6 +627,7 @@
                                             <ComboBoxItem Tag="split" Content="综合看板（性能 + K 线）" />
                                             <ComboBoxItem Tag="hardware" Content="性能专注模式" />
                                             <ComboBoxItem Tag="market" Content="行情专注模式" />
+                                            <ComboBoxItem Tag="custom" Content="自定义排版" />
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
@@ -681,6 +683,26 @@
                                         </ComboBox>
                                     </StackPanel>
                                 </Grid>
+
+                                <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Margin="0,14,0,0" Padding="0,12,0,0">
+                                    <StackPanel>
+                                        <DockPanel Margin="0,0,0,6">
+                                            <TextBlock Text="多路 CPU 显示方式" Style="{StaticResource FieldLabel}" Margin="0" DockPanel.Dock="Left" />
+                                            <TextBlock x:Name="TxtCpuTopologyInfo"
+                                                       Text="检测处理器中"
+                                                       FontFamily="JetBrains Mono, Consolas, Noto Sans SC"
+                                                       FontSize="14"
+                                                       Foreground="{DynamicResource TextMuted}"
+                                                       DockPanel.Dock="Right" />
+                                        </DockPanel>
+                                        <ComboBox x:Name="ComboCpuDisplayTarget" Style="{StaticResource SpecCombo}" SelectionChanged="ComboCpuDisplayTarget_Changed" />
+                                        <TextBlock Text="支持双路 / 多路物理 CPU 分路独立展示核心曲线、频率、温度与功耗，也可合并总览或单独聚焦某一颗 CPU。"
+                                                   Foreground="{DynamicResource TextMuted}"
+                                                   FontSize="14"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,8,0,0" />
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
 
@@ -735,7 +757,207 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- ==================== TAB 3: 行情、K 线与标的 ==================== -->
+                    <!-- ==================== TAB 3: 自定义排版编辑器 ==================== -->
+                    <Grid x:Name="PanelLayout" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.38*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Left Card: Interactive Visual Grid Canvas -->
+                        <Border Grid.Column="0" Style="{StaticResource SectionCard}" VerticalAlignment="Top">
+                            <StackPanel>
+                                <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                                    <TextBlock Text="可视化排版画布" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                    <Border x:Name="LayoutActiveBadge" CornerRadius="99" Padding="10,3" Background="{DynamicResource BorderToken}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                        <TextBlock x:Name="LayoutActiveBadgeText" Text="未启用" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                    </Border>
+                                </DockPanel>
+
+                                <!-- One-Click Layout Presets -->
+                                <WrapPanel Margin="0,0,0,8">
+                                    <TextBlock Text="预设模板：" FontSize="14" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="0,0,6,4" />
+                                    <Button Content="综合看板" Tag="split" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
+                                    <Button Content="纯硬件大屏" Tag="hardware" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
+                                    <Button Content="竖屏副屏" Tag="portrait" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
+                                    <Button Content="机箱长条屏" Tag="bar" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
+                                    <Button Content="极简盯盘" Tag="trading" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,0,4" Click="BtnLayoutPreset_Click" />
+                                </WrapPanel>
+
+                                <!-- Interactive Drag & Resize Grid Canvas -->
+                                <Border Background="{DynamicResource BgPage}"
+                                        BorderBrush="{DynamicResource BorderToken}"
+                                        BorderThickness="1"
+                                        CornerRadius="6"
+                                        Padding="8"
+                                        Margin="0,0,0,10">
+                                    <Canvas x:Name="LayoutEditorCanvas"
+                                            Height="252"
+                                            ClipToBounds="True"
+                                            Background="Transparent"
+                                            SizeChanged="LayoutEditorCanvas_SizeChanged"
+                                            MouseMove="LayoutEditorCanvas_MouseMove"
+                                            MouseLeftButtonUp="LayoutEditorCanvas_MouseLeftButtonUp" />
+                                </Border>
+
+                                <DockPanel LastChildFill="False">
+                                    <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                        <Button Content="防重叠整理" Style="{StaticResource SecondaryButton}" Padding="12,0" Margin="0,0,8,0" Click="BtnLayoutAutoPack_Click" />
+                                        <Button Content="重置默认" Style="{StaticResource SecondaryButton}" Padding="12,0" Click="BtnLayoutReset_Click" />
+                                    </StackPanel>
+                                    <Button x:Name="BtnActivateCustomLayout" Content="启用自定义排版" Style="{StaticResource PrimaryButton}" DockPanel.Dock="Right" Click="BtnActivateCustomLayout_Click" />
+                                </DockPanel>
+
+                                <TextBlock Text="拖动卡片可调整位置，拖动右下角手柄缩放宽高，实时同步监控窗口。"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           FontSize="14"
+                                           TextWrapping="Wrap"
+                                           Margin="0,8,0,0" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Right Column: Grid Settings + Selected Widget Inspector + Module Visibility -->
+                        <StackPanel Grid.Column="2">
+                            <!-- Grid Dimensions Card -->
+                            <Border Style="{StaticResource SectionCard}" Padding="14,12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <TextBlock Text="网格参数" FontSize="16" FontWeight="Medium" Margin="0,0,0,8" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="列数" Style="{StaticResource FieldLabel}" />
+                                            <ComboBox x:Name="ComboGridCols" Style="{StaticResource SpecCombo}" SelectionChanged="ComboGridConfig_Changed">
+                                                <ComboBoxItem Tag="4" Content="4 列" />
+                                                <ComboBoxItem Tag="6" Content="6 列" />
+                                                <ComboBoxItem Tag="8" Content="8 列" />
+                                                <ComboBoxItem Tag="12" Content="12 列" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="行数" Style="{StaticResource FieldLabel}" />
+                                            <ComboBox x:Name="ComboGridRows" Style="{StaticResource SpecCombo}" SelectionChanged="ComboGridConfig_Changed">
+                                                <ComboBoxItem Tag="4" Content="4 行" />
+                                                <ComboBoxItem Tag="6" Content="6 行" />
+                                                <ComboBoxItem Tag="8" Content="8 行" />
+                                                <ComboBoxItem Tag="10" Content="10 行" />
+                                                <ComboBoxItem Tag="12" Content="12 行" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="4">
+                                            <TextBlock Text="间距" Style="{StaticResource FieldLabel}" />
+                                            <ComboBox x:Name="ComboGridGap" Style="{StaticResource SpecCombo}" SelectionChanged="ComboGridConfig_Changed">
+                                                <ComboBoxItem Tag="4" Content="4 px" />
+                                                <ComboBoxItem Tag="8" Content="8 px" />
+                                                <ComboBoxItem Tag="12" Content="12 px" />
+                                                <ComboBoxItem Tag="16" Content="16 px" />
+                                                <ComboBoxItem Tag="20" Content="20 px" />
+                                            </ComboBox>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Selected Widget Precision Controls -->
+                            <Border Style="{StaticResource SectionCard}" Padding="14,12" Margin="0,0,0,10">
+                                <StackPanel>
+                                    <DockPanel LastChildFill="False" Margin="0,0,0,8">
+                                        <TextBlock x:Name="TxtSelectedWidgetTitle" Text="选中：CPU 监控" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" TextTrimming="CharacterEllipsis" />
+                                        <CheckBox x:Name="ChkSelectedWidgetVisible" Content="显示" Style="{StaticResource SpecCheck}" DockPanel.Dock="Right" Checked="ChkSelectedWidgetVisible_Changed" Unchecked="ChkSelectedWidgetVisible_Changed" />
+                                    </DockPanel>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="8" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <!-- Col -->
+                                        <StackPanel Grid.Row="0" Grid.Column="0">
+                                            <TextBlock Text="起始列 (X)" Style="{StaticResource FieldLabel}" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="36" />
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="0" Content="−" Tag="col,-1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                                <TextBlock x:Name="TxtWidgetCol" Grid.Column="1" Text="1" FontFamily="JetBrains Mono, Consolas" FontSize="14" FontWeight="Medium" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                <Button Grid.Column="2" Content="+" Tag="col,1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- Row -->
+                                        <StackPanel Grid.Row="0" Grid.Column="2">
+                                            <TextBlock Text="起始行 (Y)" Style="{StaticResource FieldLabel}" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="36" />
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="0" Content="−" Tag="row,-1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                                <TextBlock x:Name="TxtWidgetRow" Grid.Column="1" Text="1" FontFamily="JetBrains Mono, Consolas" FontSize="14" FontWeight="Medium" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                <Button Grid.Column="2" Content="+" Tag="row,1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- ColSpan -->
+                                        <StackPanel Grid.Row="2" Grid.Column="0">
+                                            <TextBlock Text="占宽 (列)" Style="{StaticResource FieldLabel}" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="36" />
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="0" Content="−" Tag="colSpan,-1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                                <TextBlock x:Name="TxtWidgetColSpan" Grid.Column="1" Text="6" FontFamily="JetBrains Mono, Consolas" FontSize="14" FontWeight="Medium" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                <Button Grid.Column="2" Content="+" Tag="colSpan,1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- RowSpan -->
+                                        <StackPanel Grid.Row="2" Grid.Column="2">
+                                            <TextBlock Text="占高 (行)" Style="{StaticResource FieldLabel}" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="36" />
+                                                </Grid.ColumnDefinitions>
+                                                <Button Grid.Column="0" Content="−" Tag="rowSpan,-1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                                <TextBlock x:Name="TxtWidgetRowSpan" Grid.Column="1" Text="3" FontFamily="JetBrains Mono, Consolas" FontSize="14" FontWeight="Medium" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                <Button Grid.Column="2" Content="+" Tag="rowSpan,1" Style="{StaticResource SecondaryButton}" Padding="0" Click="BtnWidgetStep_Click" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Quick Module Visibility List -->
+                            <Border Style="{StaticResource SectionCard}" Padding="14,12">
+                                <StackPanel>
+                                    <TextBlock Text="模块开关（点击选中，勾选显隐）" Style="{StaticResource FieldLabel}" Margin="0,0,0,6" />
+                                    <UniformGrid x:Name="LayoutModulesGrid" Columns="3" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- ==================== TAB 4: 行情、K 线与标的 ==================== -->
                     <Grid x:Name="PanelMarket" Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

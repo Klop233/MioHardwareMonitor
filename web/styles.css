@@ -632,6 +632,7 @@ html[data-layout="market"] .hardware-panel {
   gap: 12px;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .card-head {
@@ -640,7 +641,7 @@ html[data-layout="market"] .hardware-panel {
   justify-content: space-between;
   gap: 12px;
   min-height: 28px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .card-title-group {
@@ -679,9 +680,14 @@ html[data-layout="market"] .hardware-panel {
 .hardware-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
   min-height: 0;
+}
+
+.hardware-panel .card {
+  padding: 12px 14px;
+  gap: 8px;
 }
 
 /* Hardware Focus Mode: 2-column spacious desktop monitor layout */
@@ -693,9 +699,15 @@ html[data-layout="hardware"] .hardware-panel {
   align-content: stretch;
 }
 
+html[data-layout="hardware"] .hardware-panel .card {
+  padding: 16px;
+  gap: 12px;
+}
+
 html[data-layout="hardware"] .cpu-card {
   grid-column: 1 / 2;
   grid-row: 1 / 3;
+  flex: 1 1 auto;
 }
 
 html[data-layout="hardware"] .proc-card {
@@ -709,20 +721,21 @@ html[data-layout="hardware"] .hw-two-col {
 }
 
 html[data-layout="hardware"] .cpu-canvas-wrap {
+  height: auto;
   min-height: 280px;
 }
 
 .hw-two-col {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
+  flex: 0 0 auto;
 }
 
 /* CPU Card */
 .cpu-card {
-  flex: 1.25 1 auto;
-  min-height: 280px;
+  flex: 0 0 auto;
 }
 
 .kpi-strip {
@@ -730,7 +743,7 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
-  padding: 12px 0;
+  padding: 8px 0;
 }
 
 .kpi-cell {
@@ -787,9 +800,203 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
 
 .cpu-canvas-wrap {
   flex: 1 1 auto;
-  min-height: 152px;
+  height: 152px;
+  min-height: 148px;
   width: 100%;
   position: relative;
+  overflow: hidden;
+}
+
+.cpu-canvas-wrap > .full-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.cpu-single-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Multi-CPU Per-Socket Grid */
+.cpu-multi-body {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.cpu-socket-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-ctrl);
+  background: var(--bg-page);
+  min-width: 0;
+  min-height: 180px;
+  overflow: hidden;
+}
+
+.cpu-socket-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cpu-socket-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cpu-socket-label {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--accent-text);
+  background: var(--accent-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cpu-socket-name {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cpu-socket-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.cpu-socket-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cpu-socket-kpi-val {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cpu-socket-kpi-big {
+  font-size: 18px;
+  line-height: 22px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.cpu-socket-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.cpu-socket-canvas-wrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 92px;
+  width: 100%;
+  overflow: hidden;
+}
+
+.cpu-socket-canvas-wrap > .full-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* ================= CUSTOM LAYOUT GRID (LayoutMode = custom) ================= */
+.custom-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(var(--custom-cols, 12), minmax(0, 1fr));
+  grid-template-rows: repeat(var(--custom-rows, 8), minmax(0, 1fr));
+  gap: var(--custom-gap, 12px);
+  overflow: hidden;
+}
+
+.custom-grid > .card {
+  padding: 12px 14px;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.custom-grid .cpu-card {
+  flex: none;
+}
+
+.custom-grid .cpu-canvas-wrap {
+  height: auto;
+  flex: 1 1 auto;
+  min-height: 56px;
+}
+
+.custom-grid .kline-canvas-wrap {
+  min-height: 80px;
+}
+
+.custom-grid .proc-card {
+  flex: none;
+  min-height: 0;
+}
+
+.custom-grid .fx-card {
+  padding: 8px 12px;
+  justify-content: center;
+}
+
+.custom-grid .fx-card-slot {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.custom-grid .fx-readonly-bar {
+  padding: 8px 12px;
+}
+
+.widget-hidden {
+  display: none !important;
 }
 
 .full-canvas {
@@ -847,16 +1054,25 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
 }
 
 .spark-box {
-  height: 56px;
+  height: 46px;
   width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-ctrl);
   background: var(--bg-page);
   padding: 2px;
+  position: relative;
+  overflow: hidden;
 }
 
 .spark-box.sm {
-  height: 48px;
+  height: 40px;
+}
+
+.spark-box > .full-canvas {
+  position: absolute;
+  inset: 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 4px);
 }
 
 .bar-block {
@@ -1032,10 +1248,19 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
 }
 
 /* ================= SPEC TABLE (Top Processes, Spec 06.03) ================= */
+.proc-card {
+  flex: 1 0 172px;
+  min-height: 172px;
+}
+
 .spec-table {
   border: 1px solid var(--border);
   border-radius: var(--radius-ctrl);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .spec-thead {
@@ -1043,7 +1268,8 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
   grid-template-columns: minmax(0, 1fr) 72px 88px 96px;
   column-gap: 12px;
   align-items: center;
-  height: 40px;
+  height: 34px;
+  flex-shrink: 0;
   padding: 0 12px;
   background: var(--bg-hover);
   border-bottom: 1px solid var(--border);
@@ -1056,6 +1282,9 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
 .spec-tbody {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .proc-row {
@@ -1063,11 +1292,12 @@ html[data-layout="hardware"] .cpu-canvas-wrap {
   grid-template-columns: minmax(0, 1fr) 72px 88px 96px;
   column-gap: 12px;
   align-items: center;
-  height: 40px;
+  height: 32px;
+  flex-shrink: 0;
   padding: 0 12px;
   border-bottom: 1px solid var(--border);
   font-size: 14px;
-  line-height: 22px;
+  line-height: 20px;
 }
 
 .proc-row:last-child {

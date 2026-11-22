@@ -16,6 +16,8 @@ public sealed class SparkHistoryPoint
     public double NetDn { get; set; }
     public double NetUp { get; set; }
     public double[]? Cores { get; set; }
+    public double[]? SocketUsages { get; set; }
+    public List<double[]>? SocketCores { get; set; }
 }
 
 /// <summary>
@@ -56,6 +58,7 @@ public sealed class AppController : IDisposable
     public bool IsElevated => _lastTelemetry?.IsElevated ?? false;
     public MonitorDescriptor? CurrentDisplayMonitor => _displayWindow?.CurrentMonitor;
     public MonitorDescriptor? TargetMonitor => _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
+    public TelemetrySnapshot? LastTelemetry { get { lock (_cacheSync) return _lastTelemetry; } }
     public NetworkIpSnapshot? LastNetworkIp { get { lock (_cacheSync) return _lastNetworkIp; } }
     public FxRatesPayload? LastFxRates { get { lock (_cacheSync) return _lastFxRates; } }
 
@@ -425,6 +428,9 @@ public sealed class AppController : IDisposable
         mutator(Settings);
         Settings.TelemetryIntervalMs = Math.Clamp(Settings.TelemetryIntervalMs, 500, 5000);
         Settings.Theme = SettingsService.NormalizeTheme(Settings.Theme);
+        Settings.LayoutMode = SettingsService.NormalizeLayoutMode(Settings.LayoutMode);
+        Settings.CpuDisplayTarget = SettingsService.NormalizeCpuDisplayTarget(Settings.CpuDisplayTarget);
+        Settings.CustomLayout = SettingsService.NormalizeCustomLayout(Settings.CustomLayout);
         _settingsService.Save();
 
         if (pushVisualToDisplay)
@@ -437,6 +443,18 @@ public sealed class AppController : IDisposable
         }
         RefreshTrayMenu();
         NotifyStateChanged();
+    }
+
+    public void UpdateCustomLayout(CustomLayoutConfig layout, bool activateCustomMode = false)
+    {
+        UpdateSettings(s =>
+        {
+            s.CustomLayout = SettingsService.NormalizeCustomLayout(layout);
+            if (activateCustomMode)
+            {
+                s.LayoutMode = "custom";
+            }
+        });
     }
 
     public void RefreshNetworkIpNow()
@@ -709,8 +727,13 @@ public sealed class AppController : IDisposable
                     if (_hardwareService != null)
                     {
                         var snap = _hardwareService.Collect();
+                        bool socketCountChanged;
                         lock (_cacheSync)
                         {
+                            int prevSockets = _lastTelemetry?.Cpus?.Count ?? 0;
+                            int nextSockets = snap.Cpus?.Count ?? 0;
+                            socketCountChanged = prevSockets != nextSockets;
+
                             _lastTelemetry = snap;
                             _sparkHistory.Enqueue(new SparkHistoryPoint
                             {
@@ -719,12 +742,18 @@ public sealed class AppController : IDisposable
                                 Ram = snap.Memory.UsagePercent,
                                 NetDn = snap.Network.DownloadBytesPerSec,
                                 NetUp = snap.Network.UploadBytesPerSec,
-                                Cores = snap.Cpu.CoreUsages?.ToArray()
+                                Cores = snap.Cpu.CoreUsages?.ToArray(),
+                                SocketUsages = snap.Cpus?.Select(c => c.TotalUsagePercent).ToArray(),
+                                SocketCores = snap.Cpus?.Select(c => c.CoreUsages?.ToArray() ?? Array.Empty<double>()).ToList()
                             });
                             while (_sparkHistory.Count > 60) _sparkHistory.Dequeue();
                         }
                         _displayWindow?.PostToWeb("telemetry", snap);
                         _trayManager?.UpdateLiveTooltip(snap);
+                        if (socketCountChanged)
+                        {
+                            NotifyStateChanged();
+                        }
                     }
                 }
                 catch { }

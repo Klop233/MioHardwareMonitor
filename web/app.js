@@ -8,7 +8,9 @@ const state = {
     layoutMode: 'split',
     colorScheme: 'cn',
     cpuViewMode: 'cores',
+    cpuDisplayTarget: 'auto',
     processSortBy: 'cpu',
+    customLayout: null,
     activeSymbolId: 'BTC',
     activeCategory: 'crypto',
     activeInterval: '15m',
@@ -35,8 +37,28 @@ const state = {
   fxRates: { USD: 1, CNY: 7.2, CNH: 7.2, EUR: 0.92, JPY: 155, HKD: 7.78, GBP: 0.78 },
   lastTelemetry: null,
   lastNetworkIp: null,
-  lastKline: null
+  lastKline: null,
+  socketHistory: { usages: [], cores: [] }
 };
+
+// ================= WIDGET DOM ANCHORS (FOR CUSTOM LAYOUT SWITCHING) =================
+const WIDGET_IDS = ['cpu', 'gpu', 'ram', 'network', 'disk', 'processes', 'kline', 'watchlist', 'fx'];
+const widgetAnchors = new Map();
+for (const id of WIDGET_IDS) {
+  const el = document.getElementById(`widget-${id}`);
+  if (el && el.parentNode) {
+    const marker = document.createComment(`anchor-${id}`);
+    el.parentNode.insertBefore(marker, el);
+    widgetAnchors.set(id, { el, parent: el.parentNode, marker });
+  }
+}
+const fxBarEl = document.getElementById('fx-readonly-bar');
+const fxBarHomeParent = fxBarEl ? fxBarEl.parentNode : null;
+const fxCardSlotEl = document.getElementById('fx-card-slot');
+
+// Dynamic per-socket chart registry for multi-CPU systems
+let multiCpuPanels = [];
+let activeSingleCpuTargetKey = 'combined';
 
 // ================= BRIDGE =================
 function postHost(type, payload = {}) {
@@ -89,6 +111,10 @@ function redrawAllCharts() {
   requestAnimationFrame(() => {
     cpuCoreGrid.draw();
     cpuSpark.draw();
+    for (const p of multiCpuPanels) {
+      p.coreChart.draw();
+      p.overallChart.draw();
+    }
     gpuSpark.draw();
     ramSpark.draw();
     netSpark.draw();
@@ -140,7 +166,10 @@ if (window.chrome && window.chrome.webview) {
           applyVisualSettings();
           renderWatchlist();
           updateFxReadout();
-          if (state.lastTelemetry) renderProcesses(state.lastTelemetry.topProcesses || []);
+          if (state.lastTelemetry) {
+            renderCpuSection(state.lastTelemetry, false);
+            renderProcesses(state.lastTelemetry.topProcesses || []);
+          }
         }
         break;
       case 'windowState':
@@ -200,6 +229,7 @@ function handleInit(data) {
       gpuSpark.push([pt.gpu || 0]);
       ramSpark.push([pt.ram || 0]);
       netSpark.push([pt.netDn || 0, pt.netUp || 0]);
+      recordSocketHistoryPoint(pt.socketUsages, pt.socketCores);
     }
   }
 
@@ -243,6 +273,86 @@ function applyTopBarVisibility() {
   document.documentElement.setAttribute('data-hide-topbar', hideBar ? 'true' : 'false');
 }
 
+function applyLayoutDom() {
+  const s = state.settings;
+  const isCustom = (s.layoutMode || 'split') === 'custom';
+  const builtinMain = document.getElementById('builtin-main');
+  const customGrid = document.getElementById('custom-grid');
+  if (!builtinMain || !customGrid) return;
+
+  if (isCustom) {
+    const cfg = s.customLayout || { columns: 12, rows: 8, gapPx: 12, widgets: [] };
+    const cols = Math.max(4, Math.min(16, Number(cfg.columns) || 12));
+    const rows = Math.max(2, Math.min(16, Number(cfg.rows) || 8));
+    const gap = Math.max(4, Math.min(24, Number(cfg.gapPx) || 12));
+
+    customGrid.style.setProperty('--custom-cols', String(cols));
+    customGrid.style.setProperty('--custom-rows', String(rows));
+    customGrid.style.setProperty('--custom-gap', `${gap}px`);
+
+    if (fxBarEl && fxCardSlotEl && fxBarEl.parentNode !== fxCardSlotEl) {
+      fxCardSlotEl.appendChild(fxBarEl);
+    }
+
+    const byId = new Map();
+    if (Array.isArray(cfg.widgets)) {
+      for (const w of cfg.widgets) {
+        if (w && w.id) byId.set(String(w.id).toLowerCase(), w);
+      }
+    }
+
+    for (const id of WIDGET_IDS) {
+      const anchor = widgetAnchors.get(id);
+      if (!anchor) continue;
+      const el = anchor.el;
+      const w = byId.get(id);
+
+      if (el.parentNode !== customGrid) {
+        customGrid.appendChild(el);
+      }
+
+      if (w && w.visible) {
+        const colSpan = Math.max(1, Math.min(cols, Number(w.colSpan) || 1));
+        const rowSpan = Math.max(1, Math.min(rows, Number(w.rowSpan) || 1));
+        const col = Math.max(1, Math.min(cols - colSpan + 1, Number(w.col) || 1));
+        const row = Math.max(1, Math.min(rows - rowSpan + 1, Number(w.row) || 1));
+        el.classList.remove('hidden', 'widget-hidden');
+        el.style.gridColumn = `${col} / span ${colSpan}`;
+        el.style.gridRow = `${row} / span ${rowSpan}`;
+      } else {
+        el.classList.add('widget-hidden');
+        el.style.gridColumn = '';
+        el.style.gridRow = '';
+      }
+    }
+
+    builtinMain.classList.add('hidden');
+    customGrid.classList.remove('hidden');
+  } else {
+    customGrid.classList.add('hidden');
+    builtinMain.classList.remove('hidden');
+
+    for (const id of WIDGET_IDS) {
+      const anchor = widgetAnchors.get(id);
+      if (!anchor) continue;
+      const el = anchor.el;
+      el.style.gridColumn = '';
+      el.style.gridRow = '';
+      el.classList.remove('widget-hidden');
+      if (id === 'fx') {
+        el.classList.add('hidden');
+      }
+      if (el.parentNode !== anchor.parent) {
+        anchor.parent.insertBefore(el, anchor.marker.nextSibling);
+      }
+    }
+
+    if (fxBarEl && fxBarHomeParent && fxBarEl.parentNode !== fxBarHomeParent) {
+      fxBarHomeParent.appendChild(fxBarEl);
+    }
+  }
+}
+
 function applyVisualSettings() {
   const s = state.settings;
   const theme = s.theme === 'dark' ? 'dark' : 'light';
@@ -250,6 +360,7 @@ function applyVisualSettings() {
   document.documentElement.setAttribute('data-colors', s.colorScheme || 'cn');
   document.documentElement.setAttribute('data-layout', s.layoutMode || 'split');
   applyTopBarVisibility();
+  applyLayoutDom();
 
   document.getElementById('compact-hw-strip').classList.toggle('hidden', s.layoutMode !== 'market');
   document.getElementById('compact-market-strip').classList.toggle('hidden', s.layoutMode !== 'hardware');
@@ -260,6 +371,11 @@ function applyVisualSettings() {
   document.getElementById('cpu-overall-wrap').classList.toggle('hidden', showCores);
   document.getElementById('cpu-core-hover').classList.toggle('hidden', !showCores);
   document.getElementById('cpu-view-pill').textContent = showCores ? '逻辑处理器' : '总体曲线';
+  for (const p of multiCpuPanels) {
+    p.coresWrap.classList.toggle('hidden', !showCores);
+    p.overallWrap.classList.toggle('hidden', showCores);
+    p.hoverEl.classList.toggle('hidden', !showCores);
+  }
   const nCores = state.lastTelemetry?.cpu?.coreUsages?.length || 0;
   document.getElementById('cpu-graph-caption').textContent = showCores
     ? (nCores > 0 ? `逻辑处理器（共 ${nCores} 个 · 60 秒实时曲线）` : '所有逻辑处理器（60 秒实时曲线）')
@@ -312,47 +428,10 @@ function renderTelemetry(t) {
 
   document.getElementById('uptime-badge').textContent = formatUptime(t.uptimeSeconds);
 
-  // ---- CPU ----
+  // ---- CPU (Single & Multi-CPU Support) ----
   const cpu = t.cpu || {};
   const cpuUsage = cpu.totalUsagePercent || 0;
-  document.getElementById('cpu-name').textContent = cpu.name || 'CPU';
-  document.getElementById('cpu-pct').textContent = `${Math.round(cpuUsage)}%`;
-  document.getElementById('cpu-clock').textContent =
-    `${(cpu.currentClockGhz || 0).toFixed(2)} / ${(cpu.baseClockGhz || 0).toFixed(2)} GHz`;
-  document.getElementById('cpu-cores').textContent =
-    `${cpu.physicalCores || 0} 核 / ${cpu.logicalProcessors || 0} 线程`;
-
-  const tempStr = cpu.temperatureC != null ? `${Math.round(cpu.temperatureC)} °C` : '—';
-  const powerStr = cpu.powerWatts != null ? `${Math.round(cpu.powerWatts)} W` : '—';
-  document.getElementById('cpu-temp-power').textContent = `${tempStr} / ${powerStr}`;
-
-  const cpuHealth = document.getElementById('cpu-health-pill');
-  cpuHealth.className = 'status-pill';
-  if (cpu.temperatureC != null && cpu.temperatureC >= 85) {
-    cpuHealth.textContent = `过热 ${Math.round(cpu.temperatureC)} °C`;
-    cpuHealth.classList.add('danger');
-  } else if (cpu.temperatureC != null && cpu.temperatureC >= 72) {
-    cpuHealth.textContent = `偏热 ${Math.round(cpu.temperatureC)} °C`;
-    cpuHealth.classList.add('warning');
-  } else if (cpuUsage >= 90) {
-    cpuHealth.textContent = '高负载';
-    cpuHealth.classList.add('danger');
-  } else if (cpuUsage >= 75) {
-    cpuHealth.textContent = '负载偏高';
-    cpuHealth.classList.add('warning');
-  } else {
-    cpuHealth.textContent = '健康正常';
-    cpuHealth.classList.add('success');
-  }
-
-  cpuSpark.push([cpuUsage]);
-  if (Array.isArray(cpu.coreUsages) && cpu.coreUsages.length > 0) {
-    cpuCoreGrid.push(cpu.coreUsages);
-    if ((state.settings.cpuViewMode || 'cores') !== 'overall') {
-      document.getElementById('cpu-graph-caption').textContent =
-        `逻辑处理器（共 ${cpu.coreUsages.length} 个 · 60 秒实时曲线）`;
-    }
-  }
+  renderCpuSection(t, true);
 
   // ---- GPU ----
   const gpu = t.gpu || {};
@@ -456,13 +535,295 @@ function renderTelemetry(t) {
   renderProcesses(t.topProcesses || []);
 
   // ---- Compact Hardware Strip ----
-  document.getElementById('strip-cpu').textContent = `${Math.round(cpuUsage)}% · ${(cpu.currentClockGhz || 0).toFixed(1)} GHz`;
+  const stripCpuEl = document.getElementById('strip-cpu');
+  if (Array.isArray(t.cpus) && t.cpus.length > 1) {
+    stripCpuEl.textContent = t.cpus.map((c) => `CPU${c.index + 1} ${Math.round(c.totalUsagePercent || 0)}%`).join(' / ');
+  } else {
+    stripCpuEl.textContent = `${Math.round(cpuUsage)}% · ${(cpu.currentClockGhz || 0).toFixed(1)} GHz`;
+  }
   const gpuTempStr = gpu.temperatureC != null ? ` · ${Math.round(gpu.temperatureC)} °C` : '';
   document.getElementById('strip-gpu').textContent = `${Math.round(gpuUsage)}%${gpuTempStr}`;
   document.getElementById('strip-vram').textContent = `${(gpu.vramUsedGb || 0).toFixed(1)} / ${(gpu.vramTotalGb || 0).toFixed(0)} GB`;
   document.getElementById('strip-ram').textContent = `${memPct}% (${(mem.usedGb || 0).toFixed(1)} GB)`;
   document.getElementById('strip-net-dn').textContent = formatSpeed(net.downloadBytesPerSec || 0);
   document.getElementById('strip-net-up').textContent = formatSpeed(net.uploadBytesPerSec || 0);
+}
+
+function recordSocketHistoryPoint(socketUsages, socketCores) {
+  if (!Array.isArray(socketUsages) && !Array.isArray(socketCores)) return;
+  const count = Math.max(
+    Array.isArray(socketUsages) ? socketUsages.length : 0,
+    Array.isArray(socketCores) ? socketCores.length : 0
+  );
+  for (let i = 0; i < count; i++) {
+    if (!state.socketHistory.usages[i]) state.socketHistory.usages[i] = [];
+    if (!state.socketHistory.cores[i]) state.socketHistory.cores[i] = [];
+
+    if (Array.isArray(socketUsages) && socketUsages[i] != null) {
+      state.socketHistory.usages[i].push(Number(socketUsages[i]) || 0);
+      if (state.socketHistory.usages[i].length > 60) state.socketHistory.usages[i].shift();
+    }
+    if (Array.isArray(socketCores) && Array.isArray(socketCores[i])) {
+      state.socketHistory.cores[i].push(socketCores[i]);
+      if (state.socketHistory.cores[i].length > 60) state.socketHistory.cores[i].shift();
+    }
+  }
+}
+
+function applyCpuHealthPill(pillEl, usage, tempC) {
+  pillEl.className = 'status-pill';
+  if (tempC != null && tempC >= 85) {
+    pillEl.textContent = `过热 ${Math.round(tempC)} °C`;
+    pillEl.classList.add('danger');
+  } else if (tempC != null && tempC >= 72) {
+    pillEl.textContent = `偏热 ${Math.round(tempC)} °C`;
+    pillEl.classList.add('warning');
+  } else if (usage >= 90) {
+    pillEl.textContent = '高负载';
+    pillEl.classList.add('danger');
+  } else if (usage >= 75) {
+    pillEl.textContent = '负载偏高';
+    pillEl.classList.add('warning');
+  } else {
+    pillEl.textContent = '健康正常';
+    pillEl.classList.add('success');
+  }
+}
+
+function ensureMultiCpuPanels(count) {
+  const container = document.getElementById('cpu-multi-body');
+  if (!container) return;
+  if (multiCpuPanels.length === count) return;
+
+  for (const p of multiCpuPanels) {
+    p.coreChart.dispose();
+    p.overallChart.dispose();
+  }
+  multiCpuPanels = [];
+  container.innerHTML = '';
+
+  const showCores = (state.settings.cpuViewMode || 'cores') !== 'overall';
+  for (let i = 0; i < count; i++) {
+    const box = document.createElement('div');
+    box.className = 'cpu-socket-box';
+    box.innerHTML = `
+      <div class="cpu-socket-head">
+        <div class="cpu-socket-title-wrap">
+          <span class="cpu-socket-label mono">CPU ${i + 1}</span>
+          <span class="cpu-socket-name">检测中</span>
+        </div>
+        <span class="status-pill success">健康正常</span>
+      </div>
+      <div class="cpu-socket-kpis">
+        <div class="cpu-socket-kpi"><span class="label-muted">利用率</span><span class="mono cpu-socket-kpi-big">0%</span></div>
+        <div class="cpu-socket-kpi"><span class="label-muted">频率</span><span class="mono cpu-socket-kpi-val">—</span></div>
+        <div class="cpu-socket-kpi"><span class="label-muted">核/线</span><span class="mono cpu-socket-kpi-val">—</span></div>
+        <div class="cpu-socket-kpi"><span class="label-muted">温度/功耗</span><span class="mono cpu-socket-kpi-val">—</span></div>
+      </div>
+      <div class="cpu-socket-bar">
+        <span class="label-muted cpu-socket-caption">逻辑处理器</span>
+        <span class="mono cpu-socket-hover ${showCores ? '' : 'hidden'}">悬停查看单核</span>
+      </div>
+      <div class="cpu-socket-canvas-wrap cpu-socket-cores-wrap ${showCores ? '' : 'hidden'}">
+        <canvas class="full-canvas"></canvas>
+      </div>
+      <div class="cpu-socket-canvas-wrap cpu-socket-overall-wrap ${showCores ? 'hidden' : ''}">
+        <canvas class="full-canvas"></canvas>
+      </div>`;
+    container.appendChild(box);
+
+    const kpiVals = box.querySelectorAll('.cpu-socket-kpi-val');
+    const hoverEl = box.querySelector('.cpu-socket-hover');
+    const coresWrap = box.querySelector('.cpu-socket-cores-wrap');
+    const overallWrap = box.querySelector('.cpu-socket-overall-wrap');
+    const coreCanvas = coresWrap.querySelector('canvas');
+    const overallCanvas = overallWrap.querySelector('canvas');
+
+    const sockIndex = i;
+    const coreChart = new CpuCoreGridChart(coreCanvas, (info) => {
+      if (!info) {
+        hoverEl.textContent = '悬停查看单核';
+      } else {
+        hoverEl.textContent = `CPU${sockIndex + 1} #${info.index} · ${Math.round(info.current)}% (峰 ${Math.round(info.peak)}%)`;
+      }
+    }, 60);
+
+    const overallChart = new SparklineChart(
+      overallCanvas,
+      [{ colorVar: '--accent', fillAlpha: 0.14 }],
+      60,
+      100
+    );
+
+    // Hydrate from buffered socket history
+    if (Array.isArray(state.socketHistory.cores[i])) {
+      coreChart.hydrateCoreArrays(state.socketHistory.cores[i]);
+    }
+    if (Array.isArray(state.socketHistory.usages[i])) {
+      for (const u of state.socketHistory.usages[i]) {
+        overallChart.push([u]);
+      }
+    }
+
+    multiCpuPanels.push({
+      el: box,
+      labelEl: box.querySelector('.cpu-socket-label'),
+      nameEl: box.querySelector('.cpu-socket-name'),
+      healthEl: box.querySelector('.status-pill'),
+      pctEl: box.querySelector('.cpu-socket-kpi-big'),
+      clockEl: kpiVals[0],
+      coresEl: kpiVals[1],
+      tempPowerEl: kpiVals[2],
+      captionEl: box.querySelector('.cpu-socket-caption'),
+      hoverEl,
+      coresWrap,
+      overallWrap,
+      coreChart,
+      overallChart
+    });
+  }
+}
+
+function renderCpuSection(t, pushSample = true) {
+  const agg = t.cpu || {};
+  const cpus = Array.isArray(t.cpus) && t.cpus.length > 0
+    ? t.cpus
+    : [{
+        index: 0,
+        label: 'CPU 1',
+        name: agg.name || 'CPU',
+        physicalCores: agg.physicalCores || 0,
+        logicalProcessors: agg.logicalProcessors || 0,
+        totalUsagePercent: agg.totalUsagePercent || 0,
+        currentClockGhz: agg.currentClockGhz || 0,
+        baseClockGhz: agg.baseClockGhz || 0,
+        temperatureC: agg.temperatureC ?? null,
+        powerWatts: agg.powerWatts ?? null,
+        coreUsages: agg.coreUsages || []
+      }];
+
+  if (pushSample) {
+    recordSocketHistoryPoint(
+      cpus.map((c) => c.totalUsagePercent || 0),
+      cpus.map((c) => c.coreUsages || [])
+    );
+  }
+
+  const target = (state.settings.cpuDisplayTarget || 'auto').toLowerCase();
+  const isMulti = cpus.length > 1;
+  const parsedIdx = /^\d+$/.test(target) ? parseInt(target, 10) : -1;
+  const focusSocket = parsedIdx >= 0 && parsedIdx < cpus.length ? cpus[parsedIdx] : null;
+  const showSplitMulti = isMulti && (target === 'auto' || target === 'all') && !focusSocket;
+
+  const singleBody = document.getElementById('cpu-single-body');
+  const multiBody = document.getElementById('cpu-multi-body');
+  const titleEl = document.getElementById('cpu-title');
+  const nameEl = document.getElementById('cpu-name');
+  const socketPill = document.getElementById('cpu-socket-pill');
+  const healthEl = document.getElementById('cpu-health-pill');
+  const showCores = (state.settings.cpuViewMode || 'cores') !== 'overall';
+
+  if (showSplitMulti) {
+    singleBody.classList.add('hidden');
+    multiBody.classList.remove('hidden');
+
+    titleEl.textContent = 'CPU 监控';
+    nameEl.textContent = agg.name || `${cpus.length} 路处理器`;
+    socketPill.textContent = `${cpus.length} 路分显`;
+    socketPill.classList.remove('hidden');
+    applyCpuHealthPill(healthEl, agg.totalUsagePercent || 0, agg.temperatureC ?? null);
+
+    ensureMultiCpuPanels(cpus.length);
+
+    for (let i = 0; i < cpus.length; i++) {
+      const sock = cpus[i];
+      const p = multiCpuPanels[i];
+      if (!p) continue;
+
+      const u = sock.totalUsagePercent || 0;
+      p.labelEl.textContent = sock.label || `CPU ${i + 1}`;
+      p.nameEl.textContent = sock.name || 'CPU';
+      p.pctEl.textContent = `${Math.round(u)}%`;
+      p.clockEl.textContent = `${(sock.currentClockGhz || 0).toFixed(2)} GHz`;
+      p.coresEl.textContent = `${sock.physicalCores || 0}C/${sock.logicalProcessors || 0}T`;
+      const tStr = sock.temperatureC != null ? `${Math.round(sock.temperatureC)}°C` : '—';
+      const wStr = sock.powerWatts != null ? `${Math.round(sock.powerWatts)}W` : '—';
+      p.tempPowerEl.textContent = `${tStr}/${wStr}`;
+      applyCpuHealthPill(p.healthEl, u, sock.temperatureC ?? null);
+
+      const nCore = Array.isArray(sock.coreUsages) ? sock.coreUsages.length : 0;
+      p.captionEl.textContent = showCores ? `${nCore} 逻辑核心` : '总体利用率';
+      p.coresWrap.classList.toggle('hidden', !showCores);
+      p.overallWrap.classList.toggle('hidden', showCores);
+      p.hoverEl.classList.toggle('hidden', !showCores);
+
+      if (pushSample) {
+        p.overallChart.push([u]);
+        if (nCore > 0) p.coreChart.push(sock.coreUsages);
+      }
+    }
+    return;
+  }
+
+  // Single CPU / Focused Socket / Combined Multi-CPU view
+  multiBody.classList.add('hidden');
+  singleBody.classList.remove('hidden');
+
+  const viewCpu = focusSocket || agg;
+  const viewKey = focusSocket ? `sock-${focusSocket.index}` : 'combined';
+
+  if (activeSingleCpuTargetKey !== viewKey) {
+    activeSingleCpuTargetKey = viewKey;
+    cpuCoreGrid.coreHistories = [];
+    cpuSpark.seriesData = cpuSpark.seriesConfigs.map(() => []);
+    if (focusSocket) {
+      const i = focusSocket.index;
+      if (Array.isArray(state.socketHistory.cores[i])) {
+        cpuCoreGrid.hydrateCoreArrays(state.socketHistory.cores[i]);
+      }
+      if (Array.isArray(state.socketHistory.usages[i])) {
+        for (const u of state.socketHistory.usages[i]) cpuSpark.push([u]);
+      }
+    }
+  }
+
+  titleEl.textContent = focusSocket ? `${focusSocket.label} 监控` : 'CPU 监控';
+  nameEl.textContent = viewCpu.name || 'CPU';
+
+  if (isMulti) {
+    socketPill.textContent = focusSocket ? `${focusSocket.label} / 共 ${cpus.length} 路` : `${cpus.length} 路合并`;
+    socketPill.classList.remove('hidden');
+  } else {
+    socketPill.classList.add('hidden');
+  }
+
+  const usage = viewCpu.totalUsagePercent || 0;
+  document.getElementById('cpu-pct').textContent = `${Math.round(usage)}%`;
+  document.getElementById('cpu-clock').textContent =
+    `${(viewCpu.currentClockGhz || 0).toFixed(2)} / ${(viewCpu.baseClockGhz || 0).toFixed(2)} GHz`;
+  document.getElementById('cpu-cores').textContent =
+    `${viewCpu.physicalCores || 0} 核 / ${viewCpu.logicalProcessors || 0} 线程`;
+
+  const tempStr = viewCpu.temperatureC != null ? `${Math.round(viewCpu.temperatureC)} °C` : '—';
+  const powerStr = viewCpu.powerWatts != null ? `${Math.round(viewCpu.powerWatts)} W` : '—';
+  document.getElementById('cpu-temp-power').textContent = `${tempStr} / ${powerStr}`;
+  applyCpuHealthPill(healthEl, usage, viewCpu.temperatureC ?? null);
+
+  if (pushSample) {
+    cpuSpark.push([usage]);
+    if (Array.isArray(viewCpu.coreUsages) && viewCpu.coreUsages.length > 0) {
+      cpuCoreGrid.push(viewCpu.coreUsages);
+    }
+  } else {
+    cpuCoreGrid.draw();
+    cpuSpark.draw();
+  }
+
+  const coreCount = Array.isArray(viewCpu.coreUsages) ? viewCpu.coreUsages.length : 0;
+  if (showCores && coreCount > 0) {
+    document.getElementById('cpu-graph-caption').textContent =
+      `逻辑处理器（共 ${coreCount} 个 · 60 秒实时曲线）`;
+  }
 }
 
 function updateCpuCoreHover(info) {

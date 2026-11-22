@@ -43,59 +43,65 @@
       <div class="strip-item"><span class="label-muted">国外 IP</span><span id="strip-ip-intl" class="mono strip-val">—</span></div>
     </div>
 
-    <!-- Main Pure Data Grid -->
-    <main class="main-grid">
+    <!-- Main Pure Data Grid (Built-in Layouts: split / hardware / market) -->
+    <main id="builtin-main" class="main-grid">
       <!-- LEFT: HARDWARE MONITOR PANEL -->
       <section class="hardware-panel" aria-label="硬件监控">
-        <!-- 1. CPU Monitor Card (Task Manager Logical Processors Grid) -->
-        <article class="card cpu-card">
+        <!-- 1. CPU Monitor Card (Single & Multi-CPU Task Manager Logical Processors Grid) -->
+        <article id="widget-cpu" class="card cpu-card" data-widget="cpu">
           <div class="card-head">
             <div class="card-title-group">
-              <h2 class="card-title">CPU 监控</h2>
+              <h2 id="cpu-title" class="card-title">CPU 监控</h2>
               <span id="cpu-name" class="card-subtitle">检测中</span>
             </div>
             <div class="card-head-right">
+              <span id="cpu-socket-pill" class="status-pill info hidden">2 路</span>
               <span id="cpu-view-pill" class="status-pill neutral">逻辑处理器</span>
               <span id="cpu-health-pill" class="status-pill success">健康正常</span>
             </div>
           </div>
 
-          <div class="kpi-strip">
-            <div class="kpi-cell">
-              <span class="label-muted">总利用率</span>
-              <span id="cpu-pct" class="mono kpi-big">0%</span>
+          <div id="cpu-single-body" class="cpu-single-body">
+            <div class="kpi-strip">
+              <div class="kpi-cell">
+                <span class="label-muted">总利用率</span>
+                <span id="cpu-pct" class="mono kpi-big">0%</span>
+              </div>
+              <div class="kpi-cell">
+                <span class="label-muted">当前 / 基准频率</span>
+                <span id="cpu-clock" class="mono kpi-val">—</span>
+              </div>
+              <div class="kpi-cell">
+                <span class="label-muted">核心 / 线程</span>
+                <span id="cpu-cores" class="mono kpi-val">—</span>
+              </div>
+              <div class="kpi-cell">
+                <span class="label-muted">封装温度 / 功耗</span>
+                <span id="cpu-temp-power" class="mono kpi-val">—</span>
+              </div>
             </div>
-            <div class="kpi-cell">
-              <span class="label-muted">当前 / 基准频率</span>
-              <span id="cpu-clock" class="mono kpi-val">—</span>
+
+            <div class="cpu-graph-bar">
+              <span id="cpu-graph-caption" class="label-muted">所有逻辑处理器（60 秒实时曲线）</span>
+              <span id="cpu-core-hover" class="mono cpu-hover-info">悬停核心查看单核读数</span>
             </div>
-            <div class="kpi-cell">
-              <span class="label-muted">核心 / 线程</span>
-              <span id="cpu-cores" class="mono kpi-val">—</span>
+
+            <div id="cpu-cores-wrap" class="cpu-canvas-wrap">
+              <canvas id="cpu-cores-canvas" class="full-canvas"></canvas>
             </div>
-            <div class="kpi-cell">
-              <span class="label-muted">封装温度 / 功耗</span>
-              <span id="cpu-temp-power" class="mono kpi-val">—</span>
+            <div id="cpu-overall-wrap" class="cpu-canvas-wrap hidden">
+              <canvas id="spark-cpu" class="full-canvas"></canvas>
             </div>
           </div>
 
-          <div class="cpu-graph-bar">
-            <span id="cpu-graph-caption" class="label-muted">所有逻辑处理器（60 秒实时曲线）</span>
-            <span id="cpu-core-hover" class="mono cpu-hover-info">悬停核心查看单核读数</span>
-          </div>
-
-          <div id="cpu-cores-wrap" class="cpu-canvas-wrap">
-            <canvas id="cpu-cores-canvas" class="full-canvas"></canvas>
-          </div>
-          <div id="cpu-overall-wrap" class="cpu-canvas-wrap hidden">
-            <canvas id="spark-cpu" class="full-canvas"></canvas>
-          </div>
+          <!-- Multi-CPU Per-Socket Grid (automatically activated on 2+ CPU systems) -->
+          <div id="cpu-multi-body" class="cpu-multi-body hidden"></div>
         </article>
 
         <!-- 2. GPU + Memory Row -->
         <div class="hw-two-col">
           <!-- GPU Card -->
-          <article class="card gpu-card">
+          <article id="widget-gpu" class="card gpu-card" data-widget="gpu">
             <div class="card-head">
               <div class="card-title-group">
                 <h2 class="card-title">GPU 监控</h2>
@@ -133,7 +139,7 @@
           </article>
 
           <!-- Memory Card -->
-          <article class="card ram-card">
+          <article id="widget-ram" class="card ram-card" data-widget="ram">
             <div class="card-head">
               <div class="card-title-group">
                 <h2 class="card-title">系统内存</h2>
@@ -169,7 +175,7 @@
         <!-- 3. Network (Domestic & Overseas IPv4) + Disk Row -->
         <div class="hw-two-col">
           <!-- Network Card -->
-          <article class="card net-card">
+          <article id="widget-network" class="card net-card" data-widget="network">
             <div class="card-head">
               <div class="card-title-group">
                 <h2 class="card-title">网络监控</h2>
@@ -212,7 +218,7 @@
           </article>
 
           <!-- Disk Card -->
-          <article class="card disk-card">
+          <article id="widget-disk" class="card disk-card" data-widget="disk">
             <div class="card-head">
               <div class="card-title-group">
                 <h2 class="card-title">存储与读写</h2>
@@ -228,7 +234,7 @@
         </div>
 
         <!-- 4. Top Processes Table Card (Pure Read-Only Table) -->
-        <article class="card proc-card">
+        <article id="widget-processes" class="card proc-card" data-widget="processes">
           <div class="card-head">
             <div class="card-title-group">
               <h2 class="card-title">高占用进程</h2>
@@ -250,7 +256,7 @@
       <!-- RIGHT: PURE READ-ONLY MARKET & K-LINE PANEL -->
       <section class="market-panel" aria-label="行情与 K 线">
         <!-- K-Line Card -->
-        <article class="card kline-card">
+        <article id="widget-kline" class="card kline-card" data-widget="kline">
           <div class="kline-top">
             <div class="kline-title-col">
               <div class="kline-sym-row">
@@ -289,7 +295,7 @@
         </article>
 
         <!-- Watchlist + Read-Only FX Rate Display Card -->
-        <article class="card watchlist-card">
+        <article id="widget-watchlist" class="card watchlist-card" data-widget="watchlist">
           <div class="watchlist-head">
             <div class="card-title-group">
               <h2 id="watchlist-cat-title" class="card-title">虚拟货币</h2>
@@ -302,13 +308,20 @@
           <div id="watchlist-grid" class="watchlist-grid"></div>
 
           <!-- Pure Read-Only FX Conversion Strip (configured in Settings Window) -->
-          <div class="fx-readonly-bar" aria-label="实时汇率换算">
+          <div id="fx-readonly-bar" class="fx-readonly-bar" aria-label="实时汇率换算">
             <span class="label-muted">汇率换算</span>
             <span id="fx-expression" class="mono fx-expr">100 USD = — CNY</span>
             <span id="fx-unit-rate" class="mono label-muted fx-rate">—</span>
           </div>
         </article>
       </section>
+    </main>
+
+    <!-- Custom Layout Grid Container (Active when LayoutMode = custom) -->
+    <main id="custom-grid" class="custom-grid hidden" aria-label="自定义排版看板">
+      <article id="widget-fx" class="card fx-card hidden" data-widget="fx">
+        <div id="fx-card-slot" class="fx-card-slot"></div>
+      </article>
     </main>
 
     <!-- Compact Market Ticker Strip (Hardware Focus mode only) -->

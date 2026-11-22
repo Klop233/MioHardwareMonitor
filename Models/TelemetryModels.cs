@@ -7,6 +7,7 @@ public sealed class TelemetrySnapshot
     public long UptimeSeconds { get; set; }
     public bool IsElevated { get; set; }
     public CpuMetrics Cpu { get; set; } = new();
+    public List<CpuSocketMetrics> Cpus { get; set; } = new();
     public MemoryMetrics Memory { get; set; } = new();
     public GpuMetrics Gpu { get; set; } = new();
     public List<GpuSummary> AllGpus { get; set; } = new();
@@ -18,8 +19,26 @@ public sealed class TelemetrySnapshot
 public sealed class CpuMetrics
 {
     public string Name { get; set; } = "CPU";
+    public int SocketCount { get; set; } = 1;
     public int PhysicalCores { get; set; }
     public int LogicalProcessors { get; set; }
+    public double TotalUsagePercent { get; set; }
+    public double CurrentClockGhz { get; set; }
+    public double BaseClockGhz { get; set; }
+    public double? TemperatureC { get; set; }
+    public double? PowerWatts { get; set; }
+    public double[] CoreUsages { get; set; } = Array.Empty<double>();
+}
+
+public sealed class CpuSocketMetrics
+{
+    public int Index { get; set; }
+    public string Label { get; set; } = "CPU 1";
+    public string SocketDesignation { get; set; } = "";
+    public string Name { get; set; } = "CPU";
+    public int PhysicalCores { get; set; }
+    public int LogicalProcessors { get; set; }
+    public int StartCoreIndex { get; set; }
     public double TotalUsagePercent { get; set; }
     public double CurrentClockGhz { get; set; }
     public double BaseClockGhz { get; set; }
