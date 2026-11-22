@@ -52,6 +52,9 @@ public partial class App : System.Windows.Application
         using var netIp = new NetworkIpService();
         var ipSnap = await netIp.DetectAsync();
 
+        using var updater = new UpdateService();
+        var updateSnap = await updater.CheckForUpdatesAsync("");
+
         using var market = new MarketDataService();
         var symbols = market.GetAllSymbols(null);
         var quotes = await market.RefreshQuotesAsync(symbols, "binance", "futures", "all", true);
@@ -70,6 +73,7 @@ public partial class App : System.Windows.Application
             monitors,
             telemetry,
             networkIp = ipSnap,
+            updateCheck = updateSnap,
             quotesOk = quotes.Count(q => q.Price > 0),
             quotesTotal = quotes.Count,
             klineBnFut = $"{klineBnFut.Candles.Count} ({klineBnFut.Source}, FR={klineBnFut.FundingRate})",

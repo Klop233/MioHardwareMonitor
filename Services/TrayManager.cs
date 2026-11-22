@@ -91,6 +91,20 @@ public sealed class TrayManager : IDisposable
         catch { }
     }
 
+    public void ShowBalloon(string title, string body)
+    {
+        if (_disposed || _trayIcon == null) return;
+        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            if (_disposed || _trayIcon == null) return;
+            try
+            {
+                _trayIcon.ShowBalloonTip(3000, title, body, ToolTipIcon.Info);
+            }
+            catch { }
+        });
+    }
+
     public void NotifyHiddenToTrayOnce()
     {
         if (_disposed || _trayIcon == null || _shownMinimizeHint) return;
@@ -361,6 +375,43 @@ public sealed class TrayManager : IDisposable
         _menu.Items.Add(renderMenu);
 
         _menu.Items.Add(new ToolStripSeparator());
+
+        // 9. Software Update Quick Entry
+        var upd = _controller.GetUpdateState();
+        if (upd.Status == UpdateStatus.Downloading)
+        {
+            var dlItem = new ToolStripMenuItem($"正在下载更新 {upd.LatestRelease?.TagName} ({upd.ProgressPercent:F0}%)")
+            {
+                Font = _menuBoldFont
+            };
+            dlItem.Click += (_, _) => _controller.ShowUpdateWindow();
+            _menu.Items.Add(dlItem);
+        }
+        else if (upd.Status == UpdateStatus.ReadyToInstall && upd.LatestRelease != null)
+        {
+            var readyItem = new ToolStripMenuItem($"更新 {upd.LatestRelease.TagName} 已就绪（点击安装）")
+            {
+                Font = _menuBoldFont
+            };
+            readyItem.Click += (_, _) => _controller.ShowUpdateWindow();
+            _menu.Items.Add(readyItem);
+        }
+        else if (upd.HasUpdate && upd.LatestRelease != null)
+        {
+            string ignoredSuffix = upd.IsIgnoredVersion ? " · 已忽略" : "";
+            var availItem = new ToolStripMenuItem($"发现新版本 {upd.LatestRelease.TagName}{ignoredSuffix}（查看更新）")
+            {
+                Font = _menuBoldFont
+            };
+            availItem.Click += (_, _) => _controller.ShowUpdateWindow();
+            _menu.Items.Add(availItem);
+        }
+        else
+        {
+            var checkItem = new ToolStripMenuItem($"检查更新（当前 v{upd.CurrentVersion}）");
+            checkItem.Click += (_, _) => _ = _controller.CheckForUpdatesAsync(manual: true, showDialogIfAvailable: true, showUpToDateBalloon: true);
+            _menu.Items.Add(checkItem);
+        }
 
         if (!_controller.IsElevated)
         {

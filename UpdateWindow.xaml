@@ -1,0 +1,229 @@
+<Window x:Class="SideScreenHUD.UpdateWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="星澪硬件监控 — 软件更新"
+        Width="580"
+        Height="470"
+        MinWidth="520"
+        MinHeight="420"
+        ResizeMode="CanMinimize"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource BgPage}"
+        Foreground="{DynamicResource TextMain}"
+        FontFamily="Noto Sans SC, Microsoft YaHei UI, Segoe UI">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="BgPage" Color="#F7F8FA" />
+        <SolidColorBrush x:Key="BgSurface" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="BgHover" Color="#F1F3F5" />
+        <SolidColorBrush x:Key="BorderToken" Color="#E4E7EC" />
+        <SolidColorBrush x:Key="BorderStrong" Color="#8A94A3" />
+        <SolidColorBrush x:Key="TextMuted" Color="#5B6472" />
+        <SolidColorBrush x:Key="TextMain" Color="#1F2937" />
+        <SolidColorBrush x:Key="Accent" Color="#2B5FD9" />
+        <SolidColorBrush x:Key="AccentHover" Color="#234DB5" />
+        <SolidColorBrush x:Key="AccentText" Color="#2B5FD9" />
+        <SolidColorBrush x:Key="AccentSubtle" Color="#EAF1FB" />
+        <SolidColorBrush x:Key="Success" Color="#1F7A4A" />
+        <SolidColorBrush x:Key="SuccessSubtle" Color="#E7F4EC" />
+        <SolidColorBrush x:Key="Danger" Color="#B42318" />
+        <SolidColorBrush x:Key="DangerSubtle" Color="#FDECEA" />
+
+        <Style TargetType="Button" x:Key="PrimaryButton">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Background" Value="{DynamicResource Accent}" />
+            <Setter Property="Foreground" Value="#FFFFFF" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="18,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentHover}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource BorderToken}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="Button" x:Key="SecondaryButton">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Background" Value="{DynamicResource BgSurface}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderStrong}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource BgHover}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource BorderToken}" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource BorderToken}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="Button" x:Key="TextButton">
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="8,0" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource AccentSubtle}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- MioLab Top Bar -->
+        <Border Grid.Row="0" Background="{DynamicResource BgSurface}" BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,0,0,1">
+            <DockPanel LastChildFill="False">
+                <Border DockPanel.Dock="Left" Background="{DynamicResource Accent}" Padding="18,0">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="星澪科技" Foreground="#FFFFFF" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" />
+                        <Border Width="1" Height="16" Background="#80FFFFFF" Margin="10,0" VerticalAlignment="Center" />
+                        <TextBlock Text="软件更新" Foreground="#FFFFFF" FontSize="14" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="PkgBadge" DockPanel.Dock="Right" CornerRadius="99" Padding="10,4" Margin="0,0,16,0" Background="{DynamicResource AccentSubtle}" VerticalAlignment="Center">
+                    <TextBlock x:Name="PkgBadgeText" Text="win-x64 便携版" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource AccentText}" />
+                </Border>
+            </DockPanel>
+        </Border>
+
+        <!-- Main Body -->
+        <Grid Grid.Row="1" Margin="20,16,20,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Release Summary Header -->
+            <StackPanel Grid.Row="0" Margin="0,0,0,12">
+                <DockPanel LastChildFill="False" Margin="0,0,0,6">
+                    <TextBlock x:Name="TxtHeadline" Text="发现新版本" FontSize="18" FontWeight="Bold" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                    <Border x:Name="VersionPill" CornerRadius="99" Padding="10,3" Background="{DynamicResource AccentSubtle}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                        <TextBlock x:Name="TxtVersionTransition" Text="v1.0.0 → v1.1.0" FontFamily="JetBrains Mono, Consolas" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource AccentText}" />
+                    </Border>
+                </DockPanel>
+
+                <DockPanel LastChildFill="False">
+                    <TextBlock x:Name="TxtMeta" Text="发布日期：— · 安装包大小：—" FontSize="14" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                    <Button Content="查看 GitHub 发布页" Style="{StaticResource TextButton}" Height="28" Padding="6,0" DockPanel.Dock="Right" Click="BtnOpenRelease_Click" />
+                </DockPanel>
+            </StackPanel>
+
+            <!-- Release Notes Box -->
+            <Border Grid.Row="1" Background="{DynamicResource BgSurface}" BorderBrush="{DynamicResource BorderToken}" BorderThickness="1" CornerRadius="8" Padding="14,12">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <TextBox x:Name="TxtReleaseNotes"
+                             Text="正在加载更新说明..."
+                             IsReadOnly="True"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Foreground="{DynamicResource TextMain}"
+                             FontSize="14"
+                             TextWrapping="Wrap"
+                             AcceptsReturn="True"
+                             Padding="0" />
+                </ScrollViewer>
+            </Border>
+
+            <!-- Download Progress / Status Panel -->
+            <Border x:Name="ProgressPanel"
+                    Grid.Row="2"
+                    Background="{DynamicResource BgSurface}"
+                    BorderBrush="{DynamicResource BorderToken}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="14,12"
+                    Margin="0,12,0,0"
+                    Visibility="Collapsed">
+                <StackPanel>
+                    <DockPanel LastChildFill="False" Margin="0,0,0,8">
+                        <TextBlock x:Name="TxtProgressStatus" Text="准备下载..." FontSize="14" FontWeight="Medium" DockPanel.Dock="Left" />
+                        <TextBlock x:Name="TxtProgressDetail" Text="0%" FontFamily="JetBrains Mono, Consolas" FontSize="14" Foreground="{DynamicResource TextMuted}" DockPanel.Dock="Right" />
+                    </DockPanel>
+
+                    <Border Height="8" CornerRadius="4" Background="{DynamicResource BorderToken}" ClipToBounds="True">
+                        <Border x:Name="ProgressFill" HorizontalAlignment="Left" Width="0" CornerRadius="4" Background="{DynamicResource Accent}" />
+                    </Border>
+
+                    <TextBlock x:Name="TxtErrorDetail"
+                               Text=""
+                               Foreground="{DynamicResource Danger}"
+                               FontSize="14"
+                               TextWrapping="Wrap"
+                               Margin="0,8,0,0"
+                               Visibility="Collapsed" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Footer Action Bar (Ignore This Version / Remind Later / Download or Install) -->
+        <Border Grid.Row="2" Background="{DynamicResource BgSurface}" BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="20,12">
+            <DockPanel LastChildFill="False">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Button x:Name="BtnIgnoreVersion" Content="忽略此版本" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="BtnIgnoreVersion_Click" />
+                    <Button x:Name="BtnRemindLater" Content="下次再说" Style="{StaticResource SecondaryButton}" Click="BtnRemindLater_Click" />
+                </StackPanel>
+
+                <Button x:Name="BtnPrimaryAction" Content="立即下载更新" Style="{StaticResource PrimaryButton}" DockPanel.Dock="Right" Click="BtnPrimaryAction_Click" />
+            </DockPanel>
+        </Border>
+    </Grid>
+</Window>

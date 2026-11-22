@@ -732,7 +732,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource SectionCard}">
+                            <Border Style="{StaticResource SectionCard}" Margin="0,0,0,16">
                                 <StackPanel>
                                     <TextBlock Text="启动、托盘与传感器权限" FontSize="16" FontWeight="Medium" Margin="0,0,0,10" />
                                     <CheckBox x:Name="ChkAutoOpenDisplay" Content="启动时自动打开监控窗口" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
@@ -741,7 +741,7 @@
                                     <CheckBox x:Name="ChkOled" Content="OLED 防烧屏微位移" Style="{StaticResource SpecCheck}" Margin="0,0,0,10" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
 
                                     <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
-                                        <DockPanel>
+                                        <DockPanel LastChildFill="False">
                                             <Button x:Name="BtnElevate" Content="以管理员重启" Style="{StaticResource SecondaryButton}" DockPanel.Dock="Right" Click="BtnElevate_Click" />
                                             <TextBlock x:Name="ElevateText"
                                                        Text="CPU 封装温度需管理员权限"
@@ -752,6 +752,63 @@
                                                        Margin="0,0,12,0" />
                                         </DockPanel>
                                     </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource SectionCard}">
+                                <StackPanel>
+                                    <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                                        <TextBlock Text="软件更新" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                        <Border CornerRadius="99" Padding="10,3" Background="{DynamicResource BorderToken}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock x:Name="TxtCurrentVersionBadge" Text="v1.2.0" FontFamily="JetBrains Mono, Consolas" FontSize="14" Foreground="{DynamicResource TextMuted}" />
+                                        </Border>
+                                    </DockPanel>
+
+                                    <TextBlock x:Name="TxtUpdateStatusSummary"
+                                               Text="当前版本：v1.2.0"
+                                               FontSize="14"
+                                               Foreground="{DynamicResource TextMain}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,0,0,8" />
+
+                                    <CheckBox x:Name="ChkAutoCheckUpdates"
+                                              Content="启动时自动检查新版本（GitHub Releases）"
+                                              Style="{StaticResource SpecCheck}"
+                                              Margin="0,0,0,8"
+                                              Checked="ChkOption_Changed"
+                                              Unchecked="ChkOption_Changed" />
+
+                                    <Border x:Name="PanelIgnoredVersion"
+                                            Background="{DynamicResource BgPage}"
+                                            BorderBrush="{DynamicResource BorderToken}"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            Padding="10,6"
+                                            Margin="0,0,0,10"
+                                            Visibility="Collapsed">
+                                        <DockPanel LastChildFill="False">
+                                            <TextBlock x:Name="TxtIgnoredVersionInfo"
+                                                       Text="已忽略版本：—"
+                                                       FontSize="14"
+                                                       Foreground="{DynamicResource TextMuted}"
+                                                       VerticalAlignment="Center"
+                                                       DockPanel.Dock="Left" />
+                                            <Button Content="取消忽略"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Height="30"
+                                                    Padding="10,0"
+                                                    DockPanel.Dock="Right"
+                                                    Click="BtnClearIgnoredUpdate_Click" />
+                                        </DockPanel>
+                                    </Border>
+
+                                    <DockPanel LastChildFill="False">
+                                        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                                            <Button x:Name="BtnCheckUpdate" Content="检查更新" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="BtnCheckUpdate_Click" />
+                                            <Button x:Name="BtnOpenUpdateDialog" Content="查看并下载" Style="{StaticResource PrimaryButton}" Visibility="Collapsed" Click="BtnOpenUpdateDialog_Click" />
+                                        </StackPanel>
+                                        <Button Content="发布记录" Style="{StaticResource SecondaryButton}" DockPanel.Dock="Right" Click="BtnOpenReleasesPage_Click" />
+                                    </DockPanel>
                                 </StackPanel>
                             </Border>
                         </StackPanel>

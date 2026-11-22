@@ -31,6 +31,7 @@ public sealed class AppController : IDisposable
     private readonly DisplayManager _displayManager = new();
     private readonly MarketDataService _marketService = new();
     private readonly NetworkIpService _networkIpService = new();
+    private readonly UpdateService _updateService = new();
     private HardwareMonitorService? _hardwareService;
 
     private readonly CancellationTokenSource _cts = new();
@@ -40,7 +41,9 @@ public sealed class AppController : IDisposable
 
     private ControlWindow? _controlWindow;
     private DisplayWindow? _displayWindow;
+    private UpdateWindow? _updateWindow;
     private TrayManager? _trayManager;
+    private string _dismissedUpdateTagThisSession = "";
     private bool _disposed;
 
     // In-memory state buffers so newly created DisplayWindows hydrate immediately
@@ -63,9 +66,19 @@ public sealed class AppController : IDisposable
     public FxRatesPayload? LastFxRates { get { lock (_cacheSync) return _lastFxRates; } }
 
     public event Action? StateChanged;
+    public event Action<UpdateStateSnapshot>? UpdateStateChanged;
+
+    public UpdateStateSnapshot GetUpdateState() => _updateService.GetState();
 
     public void Start()
     {
+        _updateService.StateChanged += snap =>
+        {
+            try { UpdateStateChanged?.Invoke(snap); } catch { }
+            RefreshTrayMenu();
+            NotifyStateChanged();
+        };
+
         // Resolve initial target monitor (prefer secondary display if available)
         var target = _displayManager.ResolveTargetMonitor(Settings.TargetMonitorDevice, preferSecondary: true);
         if (target != null && string.IsNullOrWhiteSpace(Settings.TargetMonitorDevice))
@@ -462,6 +475,92 @@ public sealed class AppController : IDisposable
         _ = Task.Run(() => RefreshNetworkIpInternalAsync(_cts.Token));
     }
 
+    public async Task<UpdateStateSnapshot> CheckForUpdatesAsync(bool manual, bool showDialogIfAvailable = true, bool showUpToDateBalloon = false)
+    {
+        var snap = await _updateService.CheckForUpdatesAsync(Settings.IgnoredUpdateVersion, _cts.Token);
+
+        if (snap.HasUpdate && snap.LatestRelease != null)
+        {
+            bool suppressedByIgnore = !manual && snap.IsIgnoredVersion;
+            bool suppressedByLater = !manual && UpdateService.IsVersionIgnored(snap.LatestRelease.TagName, _dismissedUpdateTagThisSession);
+
+            if (showDialogIfAvailable && !suppressedByIgnore && !suppressedByLater)
+            {
+                ShowUpdateWindow();
+            }
+        }
+        else if (manual && showUpToDateBalloon)
+        {
+            if (snap.Status == UpdateStatus.UpToDate)
+            {
+                _trayManager?.ShowBalloon("星澪硬件监控已是最新版本", $"当前版本 v{snap.CurrentVersion} 无需更新。");
+            }
+            else if (snap.Status == UpdateStatus.Error)
+            {
+                _trayManager?.ShowBalloon("检查更新失败", string.IsNullOrWhiteSpace(snap.ErrorMessage) ? "无法连接 GitHub，请稍后重试。" : snap.ErrorMessage);
+            }
+        }
+
+        return snap;
+    }
+
+    public void ShowUpdateWindow()
+    {
+        System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+        {
+            if (_disposed) return;
+            if (_updateWindow == null)
+            {
+                _updateWindow = new UpdateWindow(this);
+                _updateWindow.Closed += (_, _) => _updateWindow = null;
+            }
+            _updateWindow.Show();
+            if (_updateWindow.WindowState == WindowState.Minimized)
+                _updateWindow.WindowState = WindowState.Normal;
+            _updateWindow.Activate();
+            _updateWindow.RefreshFromState(_updateService.GetState());
+        });
+    }
+
+    public Task<UpdateStateSnapshot> DownloadLatestUpdateAsync() => _updateService.DownloadLatestAsync();
+
+    public void CancelUpdateDownload() => _updateService.CancelDownload();
+
+    public void IgnoreUpdateVersion(string tagName)
+    {
+        if (string.IsNullOrWhiteSpace(tagName)) return;
+        Settings.IgnoredUpdateVersion = tagName.Trim();
+        _settingsService.Save();
+        _updateService.UpdateIgnoredFlag(Settings.IgnoredUpdateVersion);
+        RefreshTrayMenu();
+        NotifyStateChanged();
+    }
+
+    public void ClearIgnoredUpdateVersion()
+    {
+        Settings.IgnoredUpdateVersion = "";
+        _dismissedUpdateTagThisSession = "";
+        _settingsService.Save();
+        _updateService.UpdateIgnoredFlag("");
+        RefreshTrayMenu();
+        NotifyStateChanged();
+    }
+
+    public void RemindUpdateLater(string tagName)
+    {
+        _dismissedUpdateTagThisSession = (tagName ?? "").Trim();
+    }
+
+    public (bool Success, string? ErrorMessage) ApplyDownloadedUpdate()
+    {
+        var result = _updateService.LaunchDownloadedUpdate();
+        if (result.Success)
+        {
+            ShutdownApplication();
+        }
+        return result;
+    }
+
     public void SaveSettingsOnly()
     {
         _settingsService.Save();
@@ -821,6 +920,25 @@ public sealed class AppController : IDisposable
                 try { await Task.Delay(TimeSpan.FromSeconds(60), ct); } catch { break; }
             }
         }, ct);
+
+        // 6. Auto Update Check Loop (initial check 4s after launch, then every 6 hours)
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(4), ct); } catch { return; }
+            while (!ct.IsCancellationRequested)
+            {
+                if (Settings.AutoCheckUpdates)
+                {
+                    try
+                    {
+                        await CheckForUpdatesAsync(manual: false, showDialogIfAvailable: true, showUpToDateBalloon: false);
+                    }
+                    catch { }
+                }
+
+                try { await Task.Delay(TimeSpan.FromHours(6), ct); } catch { break; }
+            }
+        }, ct);
     }
 
     private async Task RefreshNetworkIpInternalAsync(CancellationToken ct)
@@ -948,12 +1066,15 @@ public sealed class AppController : IDisposable
         try { _cts.Cancel(); } catch { }
 
         DestroyDisplayWindowInternal();
+        try { _updateWindow?.Close(); } catch { }
+        _updateWindow = null;
         try { _controlWindow?.ForceClose(); } catch { }
         _controlWindow = null;
 
         try { _hardwareService?.Dispose(); } catch { }
         try { _marketService.Dispose(); } catch { }
         try { _networkIpService.Dispose(); } catch { }
+        try { _updateService.Dispose(); } catch { }
         try { _trayManager?.Dispose(); } catch { }
         _trayManager = null;
     }

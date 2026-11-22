@@ -381,11 +381,13 @@ public partial class ControlWindow : Window
                 TxtOverseasIpInfo.Text = FormatIpSummary(netIp.Overseas, netIp.IsChecking);
             }
 
-            // Startup & Elevation
+            // Startup, Updates & Elevation
             ChkAutoOpenDisplay.IsChecked = s.AutoOpenDisplayOnStartup;
             ChkShowControl.IsChecked = s.ShowControlOnStartup;
             ChkMinTray.IsChecked = s.MinimizeToTray;
             ChkOled.IsChecked = s.OledPixelShift;
+            ChkAutoCheckUpdates.IsChecked = s.AutoCheckUpdates;
+            RefreshUpdateSectionUi(s);
 
             if (_controller.IsElevated)
             {
@@ -1207,7 +1209,73 @@ public partial class ControlWindow : Window
             s.ShowControlOnStartup = ChkShowControl.IsChecked == true;
             s.MinimizeToTray = ChkMinTray.IsChecked == true;
             s.OledPixelShift = ChkOled.IsChecked == true;
+            s.AutoCheckUpdates = ChkAutoCheckUpdates.IsChecked == true;
         });
+    }
+
+    private void RefreshUpdateSectionUi(AppSettings s)
+    {
+        var upd = _controller.GetUpdateState();
+        string pkgLabel = upd.IsInstalledMode ? "安装版" : "便携版";
+        TxtCurrentVersionBadge.Text = $"v{upd.CurrentVersion} · {upd.CurrentArch} {pkgLabel}";
+        TxtUpdateStatusSummary.Text = upd.StatusMessage;
+
+        if (upd.Status == UpdateStatus.Error && !string.IsNullOrWhiteSpace(upd.ErrorMessage))
+        {
+            TxtUpdateStatusSummary.Text = $"{upd.StatusMessage}（{upd.ErrorMessage}）";
+            TxtUpdateStatusSummary.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+        }
+        else if (upd.HasUpdate)
+        {
+            TxtUpdateStatusSummary.SetResourceReference(TextBlock.ForegroundProperty, "AccentText");
+        }
+        else
+        {
+            TxtUpdateStatusSummary.SetResourceReference(TextBlock.ForegroundProperty, "TextMain");
+        }
+
+        BtnCheckUpdate.IsEnabled = upd.Status is not UpdateStatus.Checking and not UpdateStatus.Downloading and not UpdateStatus.Verifying;
+        BtnCheckUpdate.Content = upd.Status == UpdateStatus.Checking ? "检查中..." : "检查更新";
+
+        bool showOpenBtn = upd.HasUpdate || upd.Status is UpdateStatus.Downloading or UpdateStatus.Verifying or UpdateStatus.ReadyToInstall;
+        BtnOpenUpdateDialog.Visibility = showOpenBtn ? Visibility.Visible : Visibility.Collapsed;
+        BtnOpenUpdateDialog.Content = upd.Status switch
+        {
+            UpdateStatus.Downloading => $"下载中 {upd.ProgressPercent:F0}%",
+            UpdateStatus.Verifying => "校验中...",
+            UpdateStatus.ReadyToInstall => "立即安装更新",
+            _ => "查看并下载"
+        };
+
+        if (!string.IsNullOrWhiteSpace(s.IgnoredUpdateVersion))
+        {
+            PanelIgnoredVersion.Visibility = Visibility.Visible;
+            TxtIgnoredVersionInfo.Text = $"已忽略版本：{s.IgnoredUpdateVersion}";
+        }
+        else
+        {
+            PanelIgnoredVersion.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void BtnCheckUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        _ = _controller.CheckForUpdatesAsync(manual: true, showDialogIfAvailable: true, showUpToDateBalloon: false);
+    }
+
+    private void BtnOpenUpdateDialog_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.ShowUpdateWindow();
+    }
+
+    private void BtnClearIgnoredUpdate_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.ClearIgnoredUpdateVersion();
+    }
+
+    private void BtnOpenReleasesPage_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateService.OpenUrlInBrowser(UpdateService.ReleasesPageUrl);
     }
 
     private void ComboCategory_Changed(object sender, SelectionChangedEventArgs e)

@@ -13,7 +13,7 @@
     <AssemblyName>SideScreenHUD</AssemblyName>
     <RootNamespace>SideScreenHUD</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>SideScreen HUD - 副屏信息仪表盘</Product>
   </PropertyGroup>
 

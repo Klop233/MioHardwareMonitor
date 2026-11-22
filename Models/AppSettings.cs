@@ -47,6 +47,10 @@ public sealed class AppSettings
     public bool OledPixelShift { get; set; } = false;
     public bool MinimizeToTray { get; set; } = true;
 
+    // Software Update Preferences
+    public bool AutoCheckUpdates { get; set; } = true;
+    public string IgnoredUpdateVersion { get; set; } = "";
+
     // Custom Dashboard Layout Editor configuration (12x8 grid by default)
     public CustomLayoutConfig CustomLayout { get; set; } = CustomLayoutConfig.CreatePreset("split");
 
