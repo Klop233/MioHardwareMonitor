@@ -37,6 +37,12 @@ public partial class ControlWindow : Window
     private List<MonitorDescriptor> _monitors = new();
     private readonly System.Windows.Controls.Button[] _presetButtons;
     private readonly System.Windows.Controls.Button[] _navButtons;
+    private readonly System.Windows.Controls.Button[] _donateAmountButtons;
+    private System.Windows.Threading.DispatcherTimer? _donatePollTimer;
+    private System.Windows.Threading.DispatcherTimer? _donateCountdownTimer;
+    private string _activeDonateOrderId = "";
+    private DateTimeOffset? _activeDonateExpireAt;
+    private bool _donatePollInFlight;
     private string _selectedWidgetId = "cpu";
     private string? _dragWidgetId;
     private bool _isResizingWidget;
@@ -56,7 +62,8 @@ public partial class ControlWindow : Window
             BtnPresetBottomLeft, BtnPresetBottomHalf, BtnPresetBottomRight
         };
 
-        _navButtons = new[] { BtnNavWindow, BtnNavMonitor, BtnNavLayout, BtnNavMarket };
+        _navButtons = new[] { BtnNavWindow, BtnNavMonitor, BtnNavLayout, BtnNavMarket, BtnNavDonate };
+        _donateAmountButtons = new[] { BtnDonate6, BtnDonate18, BtnDonate36, BtnDonate66, BtnDonate128, BtnDonateCustom };
 
         PopulateFxCurrencyCombos();
         ApplyThemeResources(_controller.Settings.Theme);
@@ -204,6 +211,7 @@ public partial class ControlWindow : Window
 
     public void ForceClose()
     {
+        StopDonatePolling();
         _allowClose = true;
         _controller.StateChanged -= Controller_StateChanged;
         try
@@ -223,17 +231,23 @@ public partial class ControlWindow : Window
     private void BtnNav_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string tab) return;
+        SwitchToTab(tab);
+    }
 
+    public void SwitchToTab(string tab)
+    {
         PanelWindow.Visibility = tab == "window" ? Visibility.Visible : Visibility.Collapsed;
         PanelMonitor.Visibility = tab == "monitor" ? Visibility.Visible : Visibility.Collapsed;
         PanelLayout.Visibility = tab == "layout" ? Visibility.Visible : Visibility.Collapsed;
         PanelMarket.Visibility = tab == "market" ? Visibility.Visible : Visibility.Collapsed;
+        PanelDonate.Visibility = tab == "donate" ? Visibility.Visible : Visibility.Collapsed;
 
         var normalStyle = (Style)FindResource("NavButton");
         var activeStyle = (Style)FindResource("ActiveNavButton");
         foreach (var b in _navButtons)
         {
-            b.Style = ReferenceEquals(b, btn) ? activeStyle : normalStyle;
+            bool match = string.Equals(b.Tag?.ToString(), tab, StringComparison.OrdinalIgnoreCase);
+            b.Style = match ? activeStyle : normalStyle;
         }
 
         if (tab == "layout")
@@ -454,6 +468,10 @@ public partial class ControlWindow : Window
             CustomSymbolsList.ItemsSource = null;
             CustomSymbolsList.ItemsSource = s.CustomSymbols.ToList();
             NoCustomHint.Visibility = s.CustomSymbols.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            // Donation API endpoint
+            if (!TxtDonateApiUrl.IsKeyboardFocused)
+                TxtDonateApiUrl.Text = DonationService.NormalizeBaseUrl(s.DonationApiBaseUrl);
         }
         finally
         {
@@ -1522,6 +1540,341 @@ public partial class ControlWindow : Window
         if (sender is System.Windows.Controls.Button btn && btn.Tag is string id)
         {
             _controller.RemoveCustomSymbol(id);
+        }
+    }
+
+    // ==================== DONATION (WECHAT PAY NATIVE v3) ====================
+
+    private void BtnDonateAmountPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string tag) return;
+        HighlightDonatePreset(btn);
+
+        if (tag == "custom")
+        {
+            TxtDonateAmount.Focus();
+            TxtDonateAmount.SelectAll();
+            return;
+        }
+
+        TxtDonateAmount.Text = tag;
+        if (decimal.TryParse(tag, out decimal yuan))
+        {
+            TxtDonateAmountDisplay.Text = $"¥ {yuan:F2}";
+        }
+    }
+
+    private void TxtDonateAmount_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (TxtDonateAmountDisplay == null) return;
+        if (decimal.TryParse(TxtDonateAmount.Text.Trim(), out decimal yuan) && yuan > 0)
+        {
+            TxtDonateAmountDisplay.Text = $"¥ {yuan:F2}";
+            string matchedTag = yuan == decimal.Truncate(yuan) ? ((int)yuan).ToString() : "custom";
+            var btn = _donateAmountButtons.FirstOrDefault(b => string.Equals(b.Tag?.ToString(), matchedTag, StringComparison.OrdinalIgnoreCase))
+                      ?? BtnDonateCustom;
+            HighlightDonatePreset(btn);
+        }
+    }
+
+    private void HighlightDonatePreset(System.Windows.Controls.Button selected)
+    {
+        var normalStyle = (Style)FindResource("PresetButton");
+        var activeStyle = (Style)FindResource("ActivePresetButton");
+        foreach (var b in _donateAmountButtons)
+        {
+            b.Style = ReferenceEquals(b, selected) ? activeStyle : normalStyle;
+        }
+    }
+
+    private async void BtnTestDonateApi_Click(object sender, RoutedEventArgs e)
+    {
+        string url = DonationService.NormalizeBaseUrl(TxtDonateApiUrl.Text);
+        TxtDonateApiUrl.Text = url;
+        _controller.UpdateSettings(s => s.DonationApiBaseUrl = url, pushVisualToDisplay: false);
+
+        BtnTestDonateApi.IsEnabled = false;
+        BtnTestDonateApi.Content = "测试中...";
+        TxtDonateEndpointStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+        TxtDonateEndpointStatus.Text = $"正在连接 {url}/api/donate/health ...";
+
+        try
+        {
+            var res = await _controller.DonationService.CheckHealthAsync(url);
+            if (res.Ok && res.Configured)
+            {
+                TxtDonateEndpointStatus.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+                TxtDonateEndpointStatus.Text = $"连接正常：收款商户「{res.MerchantName}」已就绪，可直接生成微信支付二维码。";
+            }
+            else if (res.Ok && !res.Configured)
+            {
+                TxtDonateEndpointStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+                TxtDonateEndpointStatus.Text = $"服务已连通，但服务端尚未填完微信商户环境变量：{string.Join("、", res.Missing)}";
+            }
+            else
+            {
+                TxtDonateEndpointStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+                TxtDonateEndpointStatus.Text = res.ErrorMessage;
+            }
+        }
+        finally
+        {
+            BtnTestDonateApi.IsEnabled = true;
+            BtnTestDonateApi.Content = "保存并测试";
+        }
+    }
+
+    private async void BtnCreateDonateOrder_Click(object sender, RoutedEventArgs e)
+    {
+        if (!decimal.TryParse(TxtDonateAmount.Text.Trim(), out decimal yuan) || yuan < 1.00m || yuan > 10000.00m)
+        {
+            SetDonateBadge("金额无效", isError: true);
+            TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            TxtDonateOrderStatus.Text = "请输入 1.00 ~ 10000.00 元之间的有效金额。";
+            TxtDonateAmount.Focus();
+            return;
+        }
+
+        string apiUrl = DonationService.NormalizeBaseUrl(TxtDonateApiUrl.Text);
+        TxtDonateApiUrl.Text = apiUrl;
+        _controller.UpdateSettings(s => s.DonationApiBaseUrl = apiUrl, pushVisualToDisplay: false);
+
+        // Close previous unpaid order if any
+        if (!string.IsNullOrEmpty(_activeDonateOrderId))
+        {
+            string prevId = _activeDonateOrderId;
+            StopDonatePolling();
+            _ = _controller.DonationService.CloseWeChatOrderAsync(apiUrl, prevId);
+        }
+
+        int amountFen = (int)Math.Round(yuan * 100m, MidpointRounding.AwayFromZero);
+        string note = TxtDonateNote.Text.Trim();
+        string ver = _controller.GetUpdateState().CurrentVersion;
+
+        BtnCreateDonateOrder.IsEnabled = false;
+        BtnCreateDonateOrder.Content = "正在下单...";
+        SetDonateBadge("下单中", isAccent: true);
+        TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+        TxtDonateOrderStatus.Text = "正在向微信支付收单服务申请扫码链接...";
+        TxtDonateOrderMeta.Text = "";
+        DonateSuccessOverlay.Visibility = Visibility.Collapsed;
+
+        try
+        {
+            var res = await _controller.DonationService.CreateWeChatNativeOrderAsync(apiUrl, amountFen, note, ver);
+            if (!res.Ok || string.IsNullOrWhiteSpace(res.CodeUrl))
+            {
+                SetDonateBadge("下单失败", isError: true);
+                ImgDonateQr.Visibility = Visibility.Collapsed;
+                DonateQrPlaceholder.Visibility = Visibility.Visible;
+                TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+                TxtDonateOrderStatus.Text = res.ErrorMessage;
+                return;
+            }
+
+            _activeDonateOrderId = res.OrderId;
+            _activeDonateExpireAt = res.ExpireAt ?? DateTimeOffset.UtcNow.AddMinutes(15);
+
+            ImgDonateQr.Source = DonationService.GenerateQrBitmapImage(res.CodeUrl);
+            ImgDonateQr.Visibility = Visibility.Visible;
+            DonateQrPlaceholder.Visibility = Visibility.Collapsed;
+            DonateSuccessOverlay.Visibility = Visibility.Collapsed;
+
+            TxtDonateAmountDisplay.Text = $"¥ {res.AmountFen / 100.0:F2}";
+            SetDonateBadge("待微信扫码", isAccent: true);
+            TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMain");
+            TxtDonateOrderStatus.Text = $"请用微信扫描上方二维码支付给「{res.MerchantName}」";
+            BtnCancelDonateOrder.Visibility = Visibility.Visible;
+            BtnQueryDonateNow.Visibility = Visibility.Visible;
+
+            StartDonatePolling();
+            UpdateDonateCountdownText();
+        }
+        finally
+        {
+            BtnCreateDonateOrder.IsEnabled = true;
+            BtnCreateDonateOrder.Content = "生成微信支付二维码";
+        }
+    }
+
+    private void BtnCancelDonateOrder_Click(object sender, RoutedEventArgs e)
+    {
+        string orderId = _activeDonateOrderId;
+        string apiUrl = DonationService.NormalizeBaseUrl(TxtDonateApiUrl.Text);
+        StopDonatePolling();
+
+        if (!string.IsNullOrEmpty(orderId))
+        {
+            _ = _controller.DonationService.CloseWeChatOrderAsync(apiUrl, orderId);
+        }
+
+        ImgDonateQr.Visibility = Visibility.Collapsed;
+        ImgDonateQr.Source = null;
+        DonateSuccessOverlay.Visibility = Visibility.Collapsed;
+        DonateQrPlaceholder.Visibility = Visibility.Visible;
+        BtnCancelDonateOrder.Visibility = Visibility.Collapsed;
+        BtnQueryDonateNow.Visibility = Visibility.Collapsed;
+        SetDonateBadge("已取消");
+        TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+        TxtDonateOrderStatus.Text = "订单已取消，可重新选择金额下单。";
+        TxtDonateOrderMeta.Text = "";
+    }
+
+    private async void BtnQueryDonateNow_Click(object sender, RoutedEventArgs e)
+    {
+        await PollActiveDonateOrderOnceAsync(manual: true);
+    }
+
+    private void StartDonatePolling()
+    {
+        StopDonatePolling(keepOrderId: true);
+
+        _donatePollTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2.5)
+        };
+        _donatePollTimer.Tick += async (_, _) => await PollActiveDonateOrderOnceAsync(manual: false);
+        _donatePollTimer.Start();
+
+        _donateCountdownTimer = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(1)
+        };
+        _donateCountdownTimer.Tick += (_, _) => UpdateDonateCountdownText();
+        _donateCountdownTimer.Start();
+    }
+
+    private void StopDonatePolling(bool keepOrderId = false)
+    {
+        try { _donatePollTimer?.Stop(); _donatePollTimer = null; } catch { }
+        try { _donateCountdownTimer?.Stop(); _donateCountdownTimer = null; } catch { }
+        if (!keepOrderId)
+        {
+            _activeDonateOrderId = "";
+            _activeDonateExpireAt = null;
+        }
+    }
+
+    private void UpdateDonateCountdownText()
+    {
+        if (string.IsNullOrEmpty(_activeDonateOrderId) || !_activeDonateExpireAt.HasValue) return;
+        var remain = _activeDonateExpireAt.Value - DateTimeOffset.UtcNow;
+        if (remain <= TimeSpan.Zero)
+        {
+            StopDonatePolling();
+            ImgDonateQr.Visibility = Visibility.Collapsed;
+            DonateQrPlaceholder.Visibility = Visibility.Visible;
+            BtnCancelDonateOrder.Visibility = Visibility.Collapsed;
+            BtnQueryDonateNow.Visibility = Visibility.Collapsed;
+            SetDonateBadge("已过期", isError: true);
+            TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            TxtDonateOrderStatus.Text = "二维码已过期，请点击左侧按钮重新生成。";
+            TxtDonateOrderMeta.Text = "";
+            return;
+        }
+
+        TxtDonateOrderMeta.Text = $"单号 {_activeDonateOrderId} · 有效期 {(int)remain.TotalMinutes:D2}:{remain.Seconds:D2}";
+    }
+
+    private async Task PollActiveDonateOrderOnceAsync(bool manual)
+    {
+        if (_donatePollInFlight || string.IsNullOrEmpty(_activeDonateOrderId)) return;
+        _donatePollInFlight = true;
+        string orderId = _activeDonateOrderId;
+        string apiUrl = DonationService.NormalizeBaseUrl(TxtDonateApiUrl.Text);
+
+        try
+        {
+            var res = await _controller.DonationService.QueryWeChatOrderStatusAsync(apiUrl, orderId);
+            if (!string.Equals(orderId, _activeDonateOrderId, StringComparison.Ordinal)) return;
+
+            if (!res.Ok)
+            {
+                if (manual)
+                {
+                    TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+                    TxtDonateOrderStatus.Text = res.ErrorMessage;
+                }
+                return;
+            }
+
+            switch ((res.TradeState ?? "").ToUpperInvariant())
+            {
+                case "SUCCESS":
+                    StopDonatePolling();
+                    ImgDonateQr.Visibility = Visibility.Collapsed;
+                    DonateQrPlaceholder.Visibility = Visibility.Collapsed;
+                    DonateSuccessOverlay.Visibility = Visibility.Visible;
+                    BtnCancelDonateOrder.Visibility = Visibility.Collapsed;
+                    BtnQueryDonateNow.Visibility = Visibility.Collapsed;
+
+                    double paidYuan = res.AmountFen > 0 ? res.AmountFen / 100.0 : (double.TryParse(TxtDonateAmount.Text, out double y) ? y : 0);
+                    TxtDonateSuccessAmount.Text = $"¥ {paidYuan:F2}";
+                    TxtDonateAmountDisplay.Text = $"¥ {paidYuan:F2}";
+                    SetDonateBadge("支付成功", isSuccess: true);
+                    TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+                    TxtDonateOrderStatus.Text = "微信支付已确认收款，衷心感谢你对星澪硬件监控的支持！";
+                    TxtDonateOrderMeta.Text = string.IsNullOrWhiteSpace(res.TransactionId)
+                        ? $"商户单号：{orderId}"
+                        : $"微信流水号：{res.TransactionId}";
+                    break;
+
+                case "USERPAYING":
+                    SetDonateBadge("支付确认中", isAccent: true);
+                    TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "AccentText");
+                    TxtDonateOrderStatus.Text = "检测到微信端正在输入密码确认，请稍候...";
+                    break;
+
+                case "CLOSED":
+                case "REVOKED":
+                case "PAYERROR":
+                    StopDonatePolling();
+                    ImgDonateQr.Visibility = Visibility.Collapsed;
+                    DonateQrPlaceholder.Visibility = Visibility.Visible;
+                    BtnCancelDonateOrder.Visibility = Visibility.Collapsed;
+                    BtnQueryDonateNow.Visibility = Visibility.Collapsed;
+                    SetDonateBadge("已关闭", isError: true);
+                    TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+                    TxtDonateOrderStatus.Text = string.IsNullOrWhiteSpace(res.TradeStateDesc) ? "订单已关闭或支付失败，请重新下单。" : res.TradeStateDesc;
+                    break;
+
+                default: // NOTPAY
+                    if (manual)
+                    {
+                        TxtDonateOrderStatus.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+                        TxtDonateOrderStatus.Text = "当前尚未检测到付款，请在微信完成支付后稍等 2 秒自动刷新。";
+                    }
+                    break;
+            }
+        }
+        finally
+        {
+            _donatePollInFlight = false;
+        }
+    }
+
+    private void SetDonateBadge(string text, bool isSuccess = false, bool isAccent = false, bool isError = false)
+    {
+        DonateStateBadgeText.Text = text;
+        if (isSuccess)
+        {
+            DonateStateBadge.SetResourceReference(Border.BackgroundProperty, "SuccessSubtle");
+            DonateStateBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+        }
+        else if (isError)
+        {
+            DonateStateBadge.SetResourceReference(Border.BackgroundProperty, "DangerSubtle");
+            DonateStateBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+        }
+        else if (isAccent)
+        {
+            DonateStateBadge.SetResourceReference(Border.BackgroundProperty, "AccentSubtle");
+            DonateStateBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "AccentText");
+        }
+        else
+        {
+            DonateStateBadge.SetResourceReference(Border.BackgroundProperty, "BorderToken");
+            DonateStateBadgeText.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
         }
     }
 

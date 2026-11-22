@@ -48,6 +48,7 @@ public sealed class SettingsService
                     parsed.ProcessSortBy = string.Equals(parsed.ProcessSortBy, "mem", StringComparison.OrdinalIgnoreCase) ? "mem" : "cpu";
                     parsed.CustomLayout = NormalizeCustomLayout(parsed.CustomLayout);
                     parsed.IgnoredUpdateVersion = (parsed.IgnoredUpdateVersion ?? "").Trim();
+                    parsed.DonationApiBaseUrl = DonationService.NormalizeBaseUrl(parsed.DonationApiBaseUrl);
                     parsed.DirectDisplayFps = Math.Clamp(parsed.DirectDisplayFps, 2, 30);
                     if (parsed.FxAmount < 0 || double.IsNaN(parsed.FxAmount) || double.IsInfinity(parsed.FxAmount)) parsed.FxAmount = 100;
                     if (string.IsNullOrWhiteSpace(parsed.FxFromCurrency)) parsed.FxFromCurrency = "USD";

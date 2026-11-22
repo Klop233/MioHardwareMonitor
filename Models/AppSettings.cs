@@ -59,6 +59,9 @@ public sealed class AppSettings
     public bool AutoCheckUpdates { get; set; } = true;
     public string IgnoredUpdateVersion { get; set; } = "";
 
+    // WeChat Pay Native v3 Acquiring Service URL (merchant private key lives strictly on the backend server)
+    public string DonationApiBaseUrl { get; set; } = Services.DonationService.DefaultApiBaseUrl;
+
     // Custom Dashboard Layout Editor configuration (12x8 grid by default)
     public CustomLayoutConfig CustomLayout { get; set; } = CustomLayoutConfig.CreatePreset("split");
 

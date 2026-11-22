@@ -1,0 +1,20 @@
+name = "mio-hardware-monitor-pay"
+main = "worker.mjs"
+compatibility_date = "2026-01-01"
+
+[vars]
+MERCHANT_NAME = "星澪科技"
+
+# 敏感凭证请使用 wrangler secret put 写入，切勿明文提交到 Git：
+#   npx wrangler secret put WECHAT_MCHID
+#   npx wrangler secret put WECHAT_APPID
+#   npx wrangler secret put WECHAT_SERIAL_NO
+#   npx wrangler secret put WECHAT_APIV3_KEY
+#   npx wrangler secret put WECHAT_PRIVATE_KEY_PEM
+#   npx wrangler secret put WECHAT_PUBLIC_KEY_ID
+#   npx wrangler secret put WECHAT_PUBLIC_KEY_PEM
+#
+# 如需绑定自定义域名（例如 donate.miolab.ink），取消下方注释：
+# [[routes]]
+# pattern = "donate.miolab.ink"
+# custom_domain = true

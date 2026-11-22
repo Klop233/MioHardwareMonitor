@@ -14,7 +14,7 @@
     <AssemblyName>SideScreenHUD</AssemblyName>
     <RootNamespace>SideScreenHUD</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <Product>SideScreen HUD - 副屏信息仪表盘</Product>
   </PropertyGroup>
 
@@ -22,6 +22,7 @@
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
     <PackageReference Include="System.Management" Version="9.0.4" />
+    <PackageReference Include="QRCoder" Version="1.6.0" />
   </ItemGroup>
 
   <ItemGroup>

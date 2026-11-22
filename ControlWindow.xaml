@@ -460,6 +460,7 @@
                         <Button x:Name="BtnNavMonitor" Content="外观与硬件监控" Tag="monitor" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavLayout" Content="自定义排版" Tag="layout" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavMarket" Content="行情、K 线与标的" Tag="market" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
+                        <Button x:Name="BtnNavDonate" Content="赞助支持" Tag="donate" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                     </StackPanel>
                 </DockPanel>
             </Border>
@@ -1254,6 +1255,184 @@
                                         <TextBlock x:Name="NoCustomHint" Text="未添加自定义标的（已内置 41 个热门标的）" Foreground="{DynamicResource TextMuted}" FontSize="14" />
                                     </StackPanel>
                                 </Border>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <!-- ==================== TAB 5: 赞助支持（微信支付 Native v3） ==================== -->
+                    <Grid x:Name="PanelDonate" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.15*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Left Card: Amount Selection & Acquiring Endpoint -->
+                        <Border Grid.Column="0" Style="{StaticResource SectionCard}" VerticalAlignment="Top">
+                            <StackPanel>
+                                <TextBlock Text="支持星澪硬件监控" FontSize="16" FontWeight="Medium" Margin="0,0,0,6" />
+                                <TextBlock Text="本软件免费开源。如果你觉得顺手，可以通过微信支付赞助一杯咖啡，用于持续更新维护与服务器开销（收款方：广州星澪科技有限公司 · 星澪科技）。"
+                                           FontSize="14"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,14" />
+
+                                <TextBlock Text="选择赞助金额" Style="{StaticResource FieldLabel}" />
+                                <UniformGrid Rows="2" Columns="3" Margin="0,0,0,12">
+                                    <Button x:Name="BtnDonate6" Content="¥ 6 · 美式" Tag="6" Style="{StaticResource PresetButton}" Click="BtnDonateAmountPreset_Click" />
+                                    <Button x:Name="BtnDonate18" Content="¥ 18 · 充电" Tag="18" Style="{StaticResource ActivePresetButton}" Click="BtnDonateAmountPreset_Click" />
+                                    <Button x:Name="BtnDonate36" Content="¥ 36 · 赞赏" Tag="36" Style="{StaticResource PresetButton}" Click="BtnDonateAmountPreset_Click" />
+                                    <Button x:Name="BtnDonate66" Content="¥ 66 · 核心" Tag="66" Style="{StaticResource PresetButton}" Click="BtnDonateAmountPreset_Click" />
+                                    <Button x:Name="BtnDonate128" Content="¥ 128 · 年度" Tag="128" Style="{StaticResource PresetButton}" Click="BtnDonateAmountPreset_Click" />
+                                    <Button x:Name="BtnDonateCustom" Content="自定义金额" Tag="custom" Style="{StaticResource PresetButton}" Click="BtnDonateAmountPreset_Click" />
+                                </UniformGrid>
+
+                                <Grid Margin="0,0,0,12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="1.4*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="金额（元）" Style="{StaticResource FieldLabel}" />
+                                        <TextBox x:Name="TxtDonateAmount"
+                                                 Text="18"
+                                                 Style="{StaticResource SpecTextBox}"
+                                                 FontFamily="JetBrains Mono, Consolas"
+                                                 Tag="最低 1.00 元"
+                                                 TextChanged="TxtDonateAmount_TextChanged" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="署名 / 留言（选填）" Style="{StaticResource FieldLabel}" />
+                                        <TextBox x:Name="TxtDonateNote"
+                                                 Style="{StaticResource SpecTextBox}"
+                                                 MaxLength="40"
+                                                 Tag="留空或写一句鼓励（最多 40 字）" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <DockPanel LastChildFill="False" Margin="0,0,0,14">
+                                    <Button x:Name="BtnCreateDonateOrder"
+                                            Content="生成微信支付二维码"
+                                            Style="{StaticResource PrimaryButton}"
+                                            DockPanel.Dock="Left"
+                                            Click="BtnCreateDonateOrder_Click" />
+                                    <Button x:Name="BtnCancelDonateOrder"
+                                            Content="取消当前订单"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Margin="8,0,0,0"
+                                            Visibility="Collapsed"
+                                            DockPanel.Dock="Left"
+                                            Click="BtnCancelDonateOrder_Click" />
+                                </DockPanel>
+
+                                <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
+                                    <StackPanel>
+                                        <TextBlock Text="微信收单服务地址（Merchant Private Key 仅保存在服务端）" Style="{StaticResource FieldLabel}" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="TxtDonateApiUrl"
+                                                     Grid.Column="0"
+                                                     Style="{StaticResource SpecTextBox}"
+                                                     FontFamily="JetBrains Mono, Consolas"
+                                                     Tag="https://donate.miolab.ink" />
+                                            <Button x:Name="BtnTestDonateApi"
+                                                    Grid.Column="1"
+                                                    Content="保存并测试"
+                                                    Style="{StaticResource SecondaryButton}"
+                                                    Margin="8,0,0,0"
+                                                    Click="BtnTestDonateApi_Click" />
+                                        </Grid>
+                                        <TextBlock x:Name="TxtDonateEndpointStatus"
+                                                   Text="默认使用 https://donate.miolab.ink（服务端源码位于 server/wechat-pay）"
+                                                   Foreground="{DynamicResource TextMuted}"
+                                                   FontSize="14"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,6,0,0" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Right Card: Live WeChat Pay QR Code & Payment Status -->
+                        <Border Grid.Column="2" Style="{StaticResource SectionCard}" VerticalAlignment="Top">
+                            <StackPanel>
+                                <DockPanel LastChildFill="False" Margin="0,0,0,14">
+                                    <TextBlock Text="微信扫码支付" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                    <Border x:Name="DonateStateBadge" CornerRadius="99" Padding="10,3" Background="{DynamicResource BorderToken}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                        <TextBlock x:Name="DonateStateBadgeText" Text="等待下单" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                    </Border>
+                                </DockPanel>
+
+                                <!-- Pure white quiet-zone frame ensures reliable scanning on both Light and Dark themes -->
+                                <Border Width="228"
+                                        Height="228"
+                                        HorizontalAlignment="Center"
+                                        Background="#FFFFFF"
+                                        BorderBrush="{DynamicResource BorderToken}"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        Padding="14"
+                                        Margin="0,0,0,12">
+                                    <Grid>
+                                        <Image x:Name="ImgDonateQr"
+                                               Stretch="Uniform"
+                                               RenderOptions.BitmapScalingMode="NearestNeighbor"
+                                               Visibility="Collapsed" />
+
+                                        <StackPanel x:Name="DonateQrPlaceholder" VerticalAlignment="Center" HorizontalAlignment="Center">
+                                            <TextBlock Text="微信支付" FontSize="18" FontWeight="Bold" Foreground="#1F7A4A" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                                            <TextBlock Text="Native v3 官方收单" FontSize="14" Foreground="#5B6472" HorizontalAlignment="Center" Margin="0,0,0,8" />
+                                            <TextBlock Text="在左侧选择金额后点击「生成微信支付二维码」" FontSize="14" Foreground="#8A94A3" TextWrapping="Wrap" TextAlignment="Center" />
+                                        </StackPanel>
+
+                                        <StackPanel x:Name="DonateSuccessOverlay" VerticalAlignment="Center" HorizontalAlignment="Center" Visibility="Collapsed">
+                                            <Border Width="48" Height="48" CornerRadius="24" Background="#E7F4EC" HorizontalAlignment="Center" Margin="0,0,0,10">
+                                                <TextBlock Text="✓" FontSize="26" FontWeight="Bold" Foreground="#1F7A4A" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                            </Border>
+                                            <TextBlock Text="支付成功" FontSize="18" FontWeight="Bold" Foreground="#1F7A4A" HorizontalAlignment="Center" Margin="0,0,0,4" />
+                                            <TextBlock x:Name="TxtDonateSuccessAmount" Text="¥ 18.00" FontFamily="JetBrains Mono, Consolas" FontSize="16" FontWeight="Medium" Foreground="#1F2937" HorizontalAlignment="Center" Margin="0,0,0,6" />
+                                            <TextBlock Text="非常感谢你的支持！" FontSize="14" Foreground="#5B6472" HorizontalAlignment="Center" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+
+                                <TextBlock x:Name="TxtDonateAmountDisplay"
+                                           Text="¥ 18.00"
+                                           FontFamily="JetBrains Mono, Consolas"
+                                           FontSize="22"
+                                           FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           Margin="0,0,0,4" />
+
+                                <TextBlock x:Name="TxtDonateOrderStatus"
+                                           Text="请打开手机微信「扫一扫」完成支付"
+                                           FontSize="14"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,6" />
+
+                                <TextBlock x:Name="TxtDonateOrderMeta"
+                                           Text=""
+                                           FontFamily="JetBrains Mono, Consolas"
+                                           FontSize="14"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           HorizontalAlignment="Center"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Margin="0,0,0,10" />
+
+                                <Button x:Name="BtnQueryDonateNow"
+                                        Content="我已完成支付 · 立即查询"
+                                        Style="{StaticResource SecondaryButton}"
+                                        HorizontalAlignment="Center"
+                                        Visibility="Collapsed"
+                                        Click="BtnQueryDonateNow_Click" />
                             </StackPanel>
                         </Border>
                     </Grid>

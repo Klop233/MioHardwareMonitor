@@ -423,6 +423,10 @@ public sealed class TrayManager : IDisposable
             _menu.Items.Add(checkItem);
         }
 
+        var donateItem = new ToolStripMenuItem("赞助支持（微信支付）");
+        donateItem.Click += (_, _) => _controller.ShowControlWindow("donate");
+        _menu.Items.Add(donateItem);
+
         if (!_controller.IsElevated)
         {
             _menu.Items.Add("以管理员身份重启（解锁 CPU 温度）", null, (_, _) => _controller.RestartAsAdministrator());

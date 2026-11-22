@@ -24,3 +24,13 @@ self-test-report.json
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Secrets & WeChat Pay certificates (NEVER commit!)
+.env
+.env.local
+.dev.vars
+*.pem
+*.p12
+*.pfx
+*.key
+apiclient_*

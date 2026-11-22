@@ -32,6 +32,7 @@ public sealed class AppController : IDisposable
     private readonly MarketDataService _marketService = new();
     private readonly NetworkIpService _networkIpService = new();
     private readonly UpdateService _updateService = new();
+    private readonly DonationService _donationService = new();
     private HardwareMonitorService? _hardwareService;
 
     private readonly CancellationTokenSource _cts = new();
@@ -57,6 +58,7 @@ public sealed class AppController : IDisposable
 
     public AppSettings Settings => _settingsService.Current;
     public DisplayManager DisplayManager => _displayManager;
+    public DonationService DonationService => _donationService;
     public bool IsDisplayOpen => _displayWindow != null;
     public bool IsDirectDisplayActive => _displayWindow?.IsDirectDisplayExclusive == true;
     public DirectDisplayTargetDescriptor? ActiveDirectDisplayTarget => _displayWindow?.DirectDisplayTarget;
@@ -116,7 +118,7 @@ public sealed class AppController : IDisposable
         }
     }
 
-    public void ShowControlWindow()
+    public void ShowControlWindow(string? initialTab = null)
     {
         System.Windows.Application.Current.Dispatcher.Invoke(() =>
         {
@@ -131,6 +133,10 @@ public sealed class AppController : IDisposable
             SyncControlWindowTopMost();
             _controlWindow.Activate();
             _controlWindow.RefreshFromController();
+            if (!string.IsNullOrWhiteSpace(initialTab))
+            {
+                _controlWindow.SwitchToTab(initialTab);
+            }
         });
     }
 
@@ -1208,6 +1214,7 @@ public sealed class AppController : IDisposable
         try { _marketService.Dispose(); } catch { }
         try { _networkIpService.Dispose(); } catch { }
         try { _updateService.Dispose(); } catch { }
+        try { _donationService.Dispose(); } catch { }
         try { _trayManager?.Dispose(); } catch { }
         _trayManager = null;
     }
