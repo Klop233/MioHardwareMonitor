@@ -1,4 +1,4 @@
-using System.Drawing;
+﻿using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 using SideScreenHUD.Models;
@@ -75,10 +75,22 @@ public sealed class TrayManager : IDisposable
         if (_disposed || _trayIcon == null) return;
         try
         {
-            string cpuText = snap.Cpus != null && snap.Cpus.Count > 1
-                ? string.Join(" · ", snap.Cpus.Take(2).Select(c => $"CPU{c.Index + 1} {Math.Round(c.TotalUsagePercent)}%"))
-                : $"CPU {Math.Round(snap.Cpu.TotalUsagePercent)}%";
-            string text = $"星澪监控 · {cpuText} · GPU {Math.Round(snap.Gpu.UsagePercent)}% · 内存 {Math.Round(snap.Memory.UsagePercent)}%";
+            string cpuText;
+            if (snap.Cpus != null && snap.Cpus.Count > 1)
+            {
+                cpuText = string.Join(" · ", snap.Cpus.Take(2).Select(c =>
+                    c.TemperatureC.HasValue
+                        ? $"CPU{c.Index + 1} {Math.Round(c.TotalUsagePercent)}% {Math.Round(c.TemperatureC.Value)}°C"
+                        : $"CPU{c.Index + 1} {Math.Round(c.TotalUsagePercent)}%"));
+            }
+            else
+            {
+                string cpuTemp = snap.Cpu.TemperatureC.HasValue ? $" {Math.Round(snap.Cpu.TemperatureC.Value)}°C" : "";
+                cpuText = $"CPU {Math.Round(snap.Cpu.TotalUsagePercent)}%{cpuTemp}";
+            }
+
+            string gpuTemp = snap.Gpu.TemperatureC.HasValue ? $" {Math.Round(snap.Gpu.TemperatureC.Value)}°C" : "";
+            string text = $"星澪 · {cpuText} · GPU {Math.Round(snap.Gpu.UsagePercent)}%{gpuTemp} · 内存 {Math.Round(snap.Memory.UsagePercent)}%";
             if (text.Length > 63) text = text[..63];
             System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
             {
@@ -123,11 +135,14 @@ public sealed class TrayManager : IDisposable
     private void ApplyMenuTheme()
     {
         if (_menu == null) return;
-        bool isDark = string.Equals(_controller.Settings.Theme, "dark", StringComparison.OrdinalIgnoreCase);
-        _menu.Renderer = new MioLabToolStripRenderer(isDark);
-        _menu.BackColor = isDark ? Color.FromArgb(0x17, 0x1A, 0x21) : Color.FromArgb(0xFF, 0xFF, 0xFF);
-        _menu.ForeColor = isDark ? Color.FromArgb(0xE6, 0xE8, 0xEC) : Color.FromArgb(0x1F, 0x29, 0x37);
+        var settings = _controller.Settings;
+        var palette = SkinCatalog.ForSettings(settings);
+        _menu.Renderer = new MioLabToolStripRenderer(palette);
+        _menu.BackColor = ToColor(palette.BgSurface);
+        _menu.ForeColor = ToColor(palette.TextMain);
     }
+
+    private static Color ToColor((byte R, byte G, byte B) c) => Color.FromArgb(c.R, c.G, c.B);
 
     private void RebuildMenuItems()
     {
@@ -181,6 +196,23 @@ public sealed class TrayManager : IDisposable
         modeMenu.DropDownItems.Add(fixedItem);
 
         modeMenu.DropDownItems.Add("打开 Windows「从桌面删除显示器」设置", null, (_, _) => AppController.OpenWindowsSpecializedDisplaySettings());
+
+        var rotSub = new ToolStripMenuItem("硬件独占旋转");
+        int curRot = DirectDisplaySession.NormalizeRotation(s.DirectDisplayRotation);
+        foreach (var (deg, label) in new[] { (0, "0°（不旋转）"), (90, "顺时针 90°（竖屏）"), (180, "180°（上下颠倒）"), (270, "顺时针 270°（竖屏 · 反向）") })
+        {
+            int capturedDeg = deg;
+            AddRadioOption(rotSub, label, curRot == capturedDeg, () => _controller.SetDirectDisplayRotation(capturedDeg));
+        }
+        modeMenu.DropDownItems.Add(rotSub);
+
+        var fpsSub = new ToolStripMenuItem("硬件独占帧率");
+        foreach (var (fps, label) in new[] { (5, "5 FPS（超低占用）"), (10, "10 FPS（推荐）"), (15, "15 FPS（较高流畅度）"), (30, "30 FPS（高刷输出）") })
+        {
+            int capturedFps = fps;
+            AddRadioOption(fpsSub, label, s.DirectDisplayFps == capturedFps, () => _controller.SetDirectDisplayFps(capturedFps));
+        }
+        modeMenu.DropDownItems.Add(fpsSub);
 
         modeMenu.DropDownItems.Add(new ToolStripSeparator());
 
@@ -276,22 +308,68 @@ public sealed class TrayManager : IDisposable
 
         _menu.Items.Add(new ToolStripSeparator());
 
-        // 5. Layout, Theme & Hardware Quick Settings
+        // 5. Monitor Page, Layout, Theme & Hardware Quick Settings
+        var pageMenu = new ToolStripMenuItem("监控页面");
+        string curPage = SettingsService.NormalizeMonitorPage(s.MonitorPage);
+        AddRadioOption(pageMenu, "硬件监控总览 (Alt+1)", curPage == "overview", () => _controller.SetMonitorPage("overview"));
+        AddRadioOption(pageMenu, "进程与线程树 (Alt+2)", curPage == "proctree", () => _controller.SetMonitorPage("proctree"));
+        pageMenu.DropDownItems.Add(new ToolStripSeparator());
+        var autoFollowTopItem = new ToolStripMenuItem("进程树：自动追踪最高负载") { Checked = s.ProcessTreeAutoFollowTop };
+        autoFollowTopItem.Click += (_, _) =>
+        {
+            bool next = !s.ProcessTreeAutoFollowTop;
+            int? pinPid = next
+                ? 0
+                : (_controller.LatestProcessTree?.ActivePid is int active && active > 0 ? active : null);
+            _controller.SetProcessTreeOptions(autoFollowTop: next, pinnedPid: pinPid);
+        };
+        pageMenu.DropDownItems.Add(autoFollowTopItem);
+        string curTreeView = SettingsService.NormalizeProcessTreeViewMode(s.ProcessTreeViewMode);
+        AddRadioOption(pageMenu, "进程树视图：树状层级", curTreeView == "tree", () => _controller.SetProcessTreeOptions(viewMode: "tree"));
+        AddRadioOption(pageMenu, "进程树视图：扁平排行", curTreeView == "flat", () => _controller.SetProcessTreeOptions(viewMode: "flat"));
+        _menu.Items.Add(pageMenu);
+
         var layoutMenu = new ToolStripMenuItem("布局视图");
-        AddRadioOption(layoutMenu, "综合看板（性能 + K 线）", s.LayoutMode == "split", () => _controller.UpdateSettings(x => x.LayoutMode = "split"));
+        if (AppFeatures.MarketEnabled)
+            AddRadioOption(layoutMenu, "综合看板（性能 + K 线）", s.LayoutMode == "split", () => _controller.UpdateSettings(x => x.LayoutMode = "split"));
         AddRadioOption(layoutMenu, "性能专注模式", s.LayoutMode == "hardware", () => _controller.UpdateSettings(x => x.LayoutMode = "hardware"));
-        AddRadioOption(layoutMenu, "行情专注模式", s.LayoutMode == "market", () => _controller.UpdateSettings(x => x.LayoutMode = "market"));
+        if (AppFeatures.MarketEnabled)
+            AddRadioOption(layoutMenu, "行情专注模式", s.LayoutMode == "market", () => _controller.UpdateSettings(x => x.LayoutMode = "market"));
         AddRadioOption(layoutMenu, "自定义排版", s.LayoutMode == "custom", () => _controller.UpdateSettings(x => x.LayoutMode = "custom"));
         _menu.Items.Add(layoutMenu);
 
         var themeMenu = new ToolStripMenuItem("界面主题");
         AddRadioOption(themeMenu, "浅色（星澪标准）", !isDark, () => _controller.UpdateSettings(x => x.Theme = "light"));
         AddRadioOption(themeMenu, "深色（星澪深色）", isDark, () => _controller.UpdateSettings(x => x.Theme = "dark"));
+        var oledBlackItem = new ToolStripMenuItem("OLED 纯黑模式（深色下 #000000）") { Checked = s.OledTrueBlack };
+        oledBlackItem.Click += (_, _) => _controller.UpdateSettings(x => x.OledTrueBlack = !x.OledTrueBlack);
+        themeMenu.DropDownItems.Add(oledBlackItem);
+
+        themeMenu.DropDownItems.Add(new ToolStripSeparator());
+        string hudStyle = SettingsService.NormalizeHudStyle(s.HudStyle);
+        AddRadioOption(themeMenu, "画面风格：精密仪器（仪表盘）", hudStyle == "instrument", () => _controller.UpdateSettings(x => x.HudStyle = "instrument"));
+        AddRadioOption(themeMenu, "画面风格：星澪扁平（经典极简）", hudStyle == "flat", () => _controller.UpdateSettings(x => x.HudStyle = "flat"));
+
+        themeMenu.DropDownItems.Add(new ToolStripSeparator());
+        foreach (var skin in SkinCatalog.All)
+        {
+            var sk = skin;
+            AddRadioOption(themeMenu, $"皮肤：{skin.Name}", SkinCatalog.Normalize(s.Skin) == skin.Key,
+                () => _controller.UpdateSettings(x => x.Skin = sk.Key));
+        }
         _menu.Items.Add(themeMenu);
 
+        var perfMenu = new ToolStripMenuItem("性能模式（传感器频率）");
+        AddRadioOption(perfMenu, "节能 · 温度功耗 6 秒/次", SettingsService.NormalizePerformanceMode(s.PerformanceMode) == "eco", () => _controller.SetPerformanceMode("eco"));
+        AddRadioOption(perfMenu, "均衡 · 温度功耗 3 秒/次（默认）", SettingsService.NormalizePerformanceMode(s.PerformanceMode) == "balanced", () => _controller.SetPerformanceMode("balanced"));
+        AddRadioOption(perfMenu, "实时 · 温度功耗 1 秒/次", SettingsService.NormalizePerformanceMode(s.PerformanceMode) == "realtime", () => _controller.SetPerformanceMode("realtime"));
+        _menu.Items.Add(perfMenu);
+
         var hwMenu = new ToolStripMenuItem("硬件监控设置");
-        AddRadioOption(hwMenu, "CPU：所有逻辑处理器（任务管理器）", s.CpuViewMode != "overall", () => _controller.UpdateSettings(x => x.CpuViewMode = "cores"));
-        AddRadioOption(hwMenu, "CPU：总体利用率曲线", s.CpuViewMode == "overall", () => _controller.UpdateSettings(x => x.CpuViewMode = "overall"));
+        string curCpuView = SettingsService.NormalizeCpuViewMode(s.CpuViewMode);
+        AddRadioOption(hwMenu, "CPU：紧凑核心格（推荐 · 省空间）", curCpuView == "compact", () => _controller.UpdateSettings(x => x.CpuViewMode = "compact"));
+        AddRadioOption(hwMenu, "CPU：完整多核曲线（任务管理器）", curCpuView == "cores", () => _controller.UpdateSettings(x => x.CpuViewMode = "cores"));
+        AddRadioOption(hwMenu, "CPU：仅总体曲线", curCpuView == "overall", () => _controller.UpdateSettings(x => x.CpuViewMode = "overall"));
         hwMenu.DropDownItems.Add(new ToolStripSeparator());
 
         var cpuTargetMenu = new ToolStripMenuItem("多路 CPU 显示方式");
@@ -316,71 +394,104 @@ public sealed class TrayManager : IDisposable
         AddRadioOption(hwMenu, "进程：按 CPU 占用排序", s.ProcessSortBy != "mem", () => _controller.UpdateSettings(x => x.ProcessSortBy = "cpu"));
         AddRadioOption(hwMenu, "进程：按内存占用排序", s.ProcessSortBy == "mem", () => _controller.UpdateSettings(x => x.ProcessSortBy = "mem"));
         hwMenu.DropDownItems.Add(new ToolStripSeparator());
-        AddRadioOption(hwMenu, "采样周期：0.5 秒", s.TelemetryIntervalMs == 500, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 500));
-        AddRadioOption(hwMenu, "采样周期：1.0 秒（推荐）", s.TelemetryIntervalMs == 1000, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 1000));
-        AddRadioOption(hwMenu, "采样周期：2.0 秒", s.TelemetryIntervalMs == 2000, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 2000));
+        AddRadioOption(hwMenu, "采样周期：0.5 秒（最流畅 · 占用较高）", s.TelemetryIntervalMs == 500, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 500));
+        AddRadioOption(hwMenu, "采样周期：1.0 秒", s.TelemetryIntervalMs == 1000, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 1000));
+        AddRadioOption(hwMenu, "采样周期：1.5 秒（推荐 · 默认）", s.TelemetryIntervalMs == 1500, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 1500));
+        AddRadioOption(hwMenu, "采样周期：3.0 秒（最省电）", s.TelemetryIntervalMs == 3000, () => _controller.UpdateSettings(x => x.TelemetryIntervalMs = 3000));
         hwMenu.DropDownItems.Add(new ToolStripSeparator());
         var oledItem = new ToolStripMenuItem("OLED 防烧屏微位移") { Checked = s.OledPixelShift };
         oledItem.Click += (_, _) => _controller.UpdateSettings(x => x.OledPixelShift = !x.OledPixelShift);
         hwMenu.DropDownItems.Add(oledItem);
+
+        var maskIpItem = new ToolStripMenuItem("隐私模式：隐藏公网 IP") { Checked = s.MaskPublicIp };
+        maskIpItem.Click += (_, _) => _controller.UpdateSettings(x => x.MaskPublicIp = !x.MaskPublicIp);
+        hwMenu.DropDownItems.Add(maskIpItem);
+
+        hwMenu.DropDownItems.Add(new ToolStripSeparator());
+        hwMenu.DropDownItems.Add("重置会话峰值", null, (_, _) => _controller.ResetSessionStats());
+
+        var recStatus = _controller.RecordingStatus;
+        if (recStatus.IsRecording)
+        {
+            var stopRecItem = new ToolStripMenuItem($"停止录制 CSV（已录 {recStatus.SampleCount} 样本）") { Checked = true };
+            stopRecItem.Click += (_, _) => _controller.StopRecording();
+            hwMenu.DropDownItems.Add(stopRecItem);
+        }
+        else
+        {
+            hwMenu.DropDownItems.Add("开始录制 CSV 遥测", null, (_, _) =>
+            {
+                var res = _controller.StartRecording();
+                if (!res.Success)
+                {
+                    ShowBalloon("开始录制失败", res.ErrorMessage ?? "无法创建 CSV 日志文件。");
+                }
+            });
+        }
+        hwMenu.DropDownItems.Add("打开遥测日志目录", null, (_, _) => _controller.OpenLogsFolder());
+        hwMenu.DropDownItems.Add("告警、录制与配置设置...", null, (_, _) => _controller.ShowControlWindow("pro"));
         _menu.Items.Add(hwMenu);
 
-        // 6. Market & K-Line Quick Settings
-        var marketMenu = new ToolStripMenuItem("行情与 K 线设置");
-        var catSub = new ToolStripMenuItem("行情板块");
-        AddRadioOption(catSub, "虚拟货币", s.ActiveCategory == "crypto", () => _controller.SelectCategory("crypto"));
-        AddRadioOption(catSub, "A 股", s.ActiveCategory == "cn", () => _controller.SelectCategory("cn"));
-        AddRadioOption(catSub, "美股", s.ActiveCategory == "us", () => _controller.SelectCategory("us"));
-        AddRadioOption(catSub, "外汇 / 黄金", s.ActiveCategory == "fx", () => _controller.SelectCategory("fx"));
-        AddRadioOption(catSub, "全部标的", s.ActiveCategory == "all", () => _controller.SelectCategory("all"));
-        marketMenu.DropDownItems.Add(catSub);
-
-        var ivSub = new ToolStripMenuItem("K 线周期");
-        foreach (var iv in new[] { "1m", "5m", "15m", "1h", "4h", "1d", "1w" })
+        // 6. Market & K-Line Quick Settings (feature-gated)
+        if (AppFeatures.MarketEnabled)
         {
-            var curIv = iv;
-            AddRadioOption(ivSub, curIv.ToUpperInvariant(), string.Equals(s.ActiveInterval, curIv, StringComparison.OrdinalIgnoreCase), () => _controller.SelectInterval(curIv));
+            var marketMenu = new ToolStripMenuItem("行情与 K 线设置");
+            var catSub = new ToolStripMenuItem("行情板块");
+            AddRadioOption(catSub, "虚拟货币", s.ActiveCategory == "crypto", () => _controller.SelectCategory("crypto"));
+            AddRadioOption(catSub, "A 股", s.ActiveCategory == "cn", () => _controller.SelectCategory("cn"));
+            AddRadioOption(catSub, "美股", s.ActiveCategory == "us", () => _controller.SelectCategory("us"));
+            AddRadioOption(catSub, "外汇 / 黄金", s.ActiveCategory == "fx", () => _controller.SelectCategory("fx"));
+            AddRadioOption(catSub, "全部标的", s.ActiveCategory == "all", () => _controller.SelectCategory("all"));
+            marketMenu.DropDownItems.Add(catSub);
+
+            var ivSub = new ToolStripMenuItem("K 线周期");
+            foreach (var iv in new[] { "1m", "5m", "15m", "1h", "4h", "1d", "1w" })
+            {
+                var curIv = iv;
+                AddRadioOption(ivSub, curIv.ToUpperInvariant(), string.Equals(s.ActiveInterval, curIv, StringComparison.OrdinalIgnoreCase), () => _controller.SelectInterval(curIv));
+            }
+            marketMenu.DropDownItems.Add(ivSub);
+
+            var indSub = new ToolStripMenuItem("技术指标与色系");
+            var maItem = new ToolStripMenuItem("MA5 / 10 / 20 均线") { Checked = s.ShowMA };
+            maItem.Click += (_, _) => _controller.UpdateSettings(x => x.ShowMA = !x.ShowMA);
+            indSub.DropDownItems.Add(maItem);
+
+            var bollItem = new ToolStripMenuItem("BOLL 布林带") { Checked = s.ShowBoll };
+            bollItem.Click += (_, _) => _controller.UpdateSettings(x => x.ShowBoll = !x.ShowBoll);
+            indSub.DropDownItems.Add(bollItem);
+
+            var volItem = new ToolStripMenuItem("成交量") { Checked = s.ShowVolume };
+            volItem.Click += (_, _) => _controller.UpdateSettings(x => x.ShowVolume = !x.ShowVolume);
+            indSub.DropDownItems.Add(volItem);
+
+            indSub.DropDownItems.Add(new ToolStripSeparator());
+            AddRadioOption(indSub, "红涨绿跌（国内）", s.ColorScheme != "global", () => _controller.UpdateSettings(x => x.ColorScheme = "cn"));
+            AddRadioOption(indSub, "绿涨红跌（国际）", s.ColorScheme == "global", () => _controller.UpdateSettings(x => x.ColorScheme = "global"));
+            marketMenu.DropDownItems.Add(indSub);
+
+            var exSub = new ToolStripMenuItem("虚拟货币交易所");
+            foreach (var (code, label) in new[] { ("binance", "Binance 币安"), ("okx", "OKX 欧易"), ("bybit", "Bybit"), ("bitget", "Bitget"), ("gate", "Gate.io") })
+            {
+                var c = code;
+                AddRadioOption(exSub, label, string.Equals(s.CryptoExchange, c, StringComparison.OrdinalIgnoreCase), () => _controller.SetCryptoConfig(c, null));
+            }
+            exSub.DropDownItems.Add(new ToolStripSeparator());
+            AddRadioOption(exSub, "U 本位永续合约", s.CryptoMarketType != "spot", () => _controller.SetCryptoConfig(null, "futures"));
+            AddRadioOption(exSub, "现货交易", s.CryptoMarketType == "spot", () => _controller.SetCryptoConfig(null, "spot"));
+            marketMenu.DropDownItems.Add(exSub);
+
+            marketMenu.DropDownItems.Add(new ToolStripSeparator());
+            marketMenu.DropDownItems.Add("立即刷新行情", null, (_, _) => _controller.RefreshMarketNow());
+            _menu.Items.Add(marketMenu);
+
         }
-        marketMenu.DropDownItems.Add(ivSub);
-
-        var indSub = new ToolStripMenuItem("技术指标与色系");
-        var maItem = new ToolStripMenuItem("MA5 / 10 / 20 均线") { Checked = s.ShowMA };
-        maItem.Click += (_, _) => _controller.UpdateSettings(x => x.ShowMA = !x.ShowMA);
-        indSub.DropDownItems.Add(maItem);
-
-        var bollItem = new ToolStripMenuItem("BOLL 布林带") { Checked = s.ShowBoll };
-        bollItem.Click += (_, _) => _controller.UpdateSettings(x => x.ShowBoll = !x.ShowBoll);
-        indSub.DropDownItems.Add(bollItem);
-
-        var volItem = new ToolStripMenuItem("成交量") { Checked = s.ShowVolume };
-        volItem.Click += (_, _) => _controller.UpdateSettings(x => x.ShowVolume = !x.ShowVolume);
-        indSub.DropDownItems.Add(volItem);
-
-        indSub.DropDownItems.Add(new ToolStripSeparator());
-        AddRadioOption(indSub, "红涨绿跌（国内）", s.ColorScheme != "global", () => _controller.UpdateSettings(x => x.ColorScheme = "cn"));
-        AddRadioOption(indSub, "绿涨红跌（国际）", s.ColorScheme == "global", () => _controller.UpdateSettings(x => x.ColorScheme = "global"));
-        marketMenu.DropDownItems.Add(indSub);
-
-        var exSub = new ToolStripMenuItem("虚拟货币交易所");
-        foreach (var (code, label) in new[] { ("binance", "Binance 币安"), ("okx", "OKX 欧易"), ("bybit", "Bybit"), ("bitget", "Bitget"), ("gate", "Gate.io") })
-        {
-            var c = code;
-            AddRadioOption(exSub, label, string.Equals(s.CryptoExchange, c, StringComparison.OrdinalIgnoreCase), () => _controller.SetCryptoConfig(c, null));
-        }
-        exSub.DropDownItems.Add(new ToolStripSeparator());
-        AddRadioOption(exSub, "U 本位永续合约", s.CryptoMarketType != "spot", () => _controller.SetCryptoConfig(null, "futures"));
-        AddRadioOption(exSub, "现货交易", s.CryptoMarketType == "spot", () => _controller.SetCryptoConfig(null, "spot"));
-        marketMenu.DropDownItems.Add(exSub);
-
-        marketMenu.DropDownItems.Add(new ToolStripSeparator());
-        marketMenu.DropDownItems.Add("立即刷新行情", null, (_, _) => _controller.RefreshMarketNow());
-        _menu.Items.Add(marketMenu);
 
         // 7. Network Exit IPv4 (Glance + Copy + Refresh)
         var ipMenu = new ToolStripMenuItem("网络出口 IPv4");
         var netIp = _controller.LastNetworkIp;
-        AddIpCopyItem(ipMenu, "国内站", netIp?.Domestic, netIp?.IsChecking ?? false);
-        AddIpCopyItem(ipMenu, "国外站", netIp?.Overseas, netIp?.IsChecking ?? false);
+        AddIpCopyItem(ipMenu, "国内站", netIp?.Domestic, netIp?.IsChecking ?? false, s.MaskPublicIp);
+        AddIpCopyItem(ipMenu, "国外站", netIp?.Overseas, netIp?.IsChecking ?? false, s.MaskPublicIp);
         ipMenu.DropDownItems.Add(new ToolStripSeparator());
         ipMenu.DropDownItems.Add("立即重新检测 IP", null, (_, _) => _controller.RefreshNetworkIpNow());
         _menu.Items.Add(ipMenu);
@@ -431,9 +542,12 @@ public sealed class TrayManager : IDisposable
             _menu.Items.Add(checkItem);
         }
 
-        var donateItem = new ToolStripMenuItem("赞助支持（微信支付）");
-        donateItem.Click += (_, _) => _controller.ShowControlWindow("donate");
-        _menu.Items.Add(donateItem);
+        if (AppFeatures.DonationEnabled)
+        {
+            var donateItem = new ToolStripMenuItem("赞助支持（微信支付）");
+            donateItem.Click += (_, _) => _controller.ShowControlWindow("donate");
+            _menu.Items.Add(donateItem);
+        }
 
         if (!_controller.IsElevated)
         {
@@ -450,12 +564,20 @@ public sealed class TrayManager : IDisposable
         parent.DropDownItems.Add(item);
     }
 
-    private static void AddIpCopyItem(ToolStripMenuItem parent, string label, IpEndpointInfo? ep, bool checking)
+    private static void AddIpCopyItem(ToolStripMenuItem parent, string label, IpEndpointInfo? ep, bool checking, bool maskIp)
     {
         if (ep != null && ep.Ok && !string.IsNullOrWhiteSpace(ep.Ip))
         {
+            string displayIp = maskIp ? SettingsService.MaskIpAddress(ep.Ip) : ep.Ip;
             string loc = string.IsNullOrWhiteSpace(ep.Location) ? "" : $"（{ep.Location}）";
-            var item = new ToolStripMenuItem($"{label}：{ep.Ip}{loc}  [点击复制]");
+            string riskBadge = FormatIpRiskSuffix(ep);
+            string suffix = maskIp ? "  [已隐私遮罩 · 点击复制]" : "  [点击复制]";
+            var item = new ToolStripMenuItem($"{label}：{displayIp}{loc}{riskBadge}{suffix}");
+            string tooltip = BuildIpRiskTooltip(ep);
+            if (!string.IsNullOrEmpty(tooltip))
+            {
+                item.ToolTipText = tooltip;
+            }
             string ipToCopy = ep.Ip;
             item.Click += (_, _) =>
             {
@@ -467,6 +589,36 @@ public sealed class TrayManager : IDisposable
         {
             parent.DropDownItems.Add(new ToolStripMenuItem($"{label}：{(checking ? "检测中" : "未连通")}") { Enabled = false });
         }
+    }
+
+    private static string FormatIpRiskSuffix(IpEndpointInfo ep)
+    {
+        var parts = new List<string>(2);
+        if (ep.PurityScore.HasValue)
+            parts.Add($"纯净{ep.PurityScore.Value}");
+        if (!string.IsNullOrWhiteSpace(ep.IpType))
+            parts.Add(ep.IpType);
+        else if (!string.IsNullOrWhiteSpace(ep.RiskLabel))
+            parts.Add(ep.RiskLabel);
+        return parts.Count > 0 ? $" [{string.Join("·", parts)}]" : "";
+    }
+
+    private static string BuildIpRiskTooltip(IpEndpointInfo ep)
+    {
+        var parts = new List<string>();
+        if (ep.PurityScore.HasValue && ep.FraudScore.HasValue)
+            parts.Add($"纯净度 {ep.PurityScore.Value} / 欺诈分 {ep.FraudScore.Value}");
+        if (!string.IsNullOrWhiteSpace(ep.RiskLabel))
+            parts.Add($"风险：{ep.RiskLabel}");
+        if (!string.IsNullOrWhiteSpace(ep.IpType))
+            parts.Add($"类型：{ep.IpType}");
+        if (!string.IsNullOrWhiteSpace(ep.Asn))
+            parts.Add(ep.Asn);
+        if (!string.IsNullOrWhiteSpace(ep.Isp))
+            parts.Add(ep.Isp);
+        if (!string.IsNullOrWhiteSpace(ep.RiskSource))
+            parts.Add($"来源：{ep.RiskSource}");
+        return string.Join(" · ", parts);
     }
 
     private static Icon? LoadAppIcon()
@@ -567,11 +719,11 @@ public sealed class TrayManager : IDisposable
 
     private sealed class MioLabToolStripRenderer : ToolStripProfessionalRenderer
     {
-        private readonly bool _dark;
+        private readonly SkinPalette _p;
 
-        public MioLabToolStripRenderer(bool dark) : base(new MioLabColorTable(dark))
+        public MioLabToolStripRenderer(SkinPalette palette) : base(new MioLabColorTable(palette))
         {
-            _dark = dark;
+            _p = palette;
             RoundedEdges = false;
         }
 
@@ -579,15 +731,15 @@ public sealed class TrayManager : IDisposable
         {
             if (!e.Item.Enabled)
             {
-                e.TextColor = _dark ? Color.FromArgb(0xA1, 0xA9, 0xB6) : Color.FromArgb(0x5B, 0x64, 0x72);
+                e.TextColor = ToColor(_p.TextMuted);
             }
             else if (e.Item is ToolStripMenuItem mi && mi.Checked)
             {
-                e.TextColor = _dark ? Color.FromArgb(0x7B, 0xA3, 0xF2) : Color.FromArgb(0x2B, 0x5F, 0xD9);
+                e.TextColor = ToColor(_p.AccentText);
             }
             else
             {
-                e.TextColor = _dark ? Color.FromArgb(0xE6, 0xE8, 0xEC) : Color.FromArgb(0x1F, 0x29, 0x37);
+                e.TextColor = ToColor(_p.TextMain);
             }
             base.OnRenderItemText(e);
         }
@@ -597,13 +749,13 @@ public sealed class TrayManager : IDisposable
             var rect = new Rectangle(3, 1, e.Item.Width - 6, e.Item.Height - 2);
             if (e.Item.Selected && e.Item.Enabled)
             {
-                Color hover = _dark ? Color.FromArgb(0x1F, 0x23, 0x2B) : Color.FromArgb(0xF1, 0xF3, 0xF5);
+                Color hover = ToColor(_p.BgHover);
                 using var b = new SolidBrush(hover);
                 e.Graphics.FillRectangle(b, rect);
             }
             else if (e.Item is ToolStripMenuItem mi && mi.Checked)
             {
-                Color subtle = _dark ? Color.FromArgb(0x1B, 0x2A, 0x45) : Color.FromArgb(0xEA, 0xF1, 0xFB);
+                Color subtle = ToColor(_p.AccentSubtle);
                 using var b = new SolidBrush(subtle);
                 e.Graphics.FillRectangle(b, rect);
             }
@@ -614,7 +766,7 @@ public sealed class TrayManager : IDisposable
             var g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             var r = e.ImageRectangle;
-            Color accent = _dark ? Color.FromArgb(0x7B, 0xA3, 0xF2) : Color.FromArgb(0x2B, 0x5F, 0xD9);
+            Color accent = ToColor(_p.AccentText);
             using var pen = new Pen(accent, 2f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
             g.DrawLines(pen, new[]
             {
@@ -626,7 +778,7 @@ public sealed class TrayManager : IDisposable
 
         protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
         {
-            Color sep = _dark ? Color.FromArgb(0x2A, 0x2F, 0x3A) : Color.FromArgb(0xE4, 0xE7, 0xEC);
+            Color sep = ToColor(_p.Border);
             int y = e.Item.Height / 2;
             using var pen = new Pen(sep, 1f);
             e.Graphics.DrawLine(pen, 8, y, e.Item.Width - 8, y);
@@ -634,18 +786,18 @@ public sealed class TrayManager : IDisposable
 
         protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
         {
-            e.ArrowColor = _dark ? Color.FromArgb(0xA1, 0xA9, 0xB6) : Color.FromArgb(0x5B, 0x64, 0x72);
+            e.ArrowColor = ToColor(_p.TextMuted);
             base.OnRenderArrow(e);
         }
     }
 
     private sealed class MioLabColorTable : ProfessionalColorTable
     {
-        private readonly bool _dark;
-        public MioLabColorTable(bool dark) => _dark = dark;
+        private readonly SkinPalette _p;
+        public MioLabColorTable(SkinPalette palette) => _p = palette;
 
-        private Color Surface => _dark ? Color.FromArgb(0x17, 0x1A, 0x21) : Color.FromArgb(0xFF, 0xFF, 0xFF);
-        private Color Border => _dark ? Color.FromArgb(0x2A, 0x2F, 0x3A) : Color.FromArgb(0xE4, 0xE7, 0xEC);
+        private Color Surface => ToColor(_p.BgSurface);
+        private Color Border => ToColor(_p.Border);
 
         public override Color ToolStripDropDownBackground => Surface;
         public override Color ImageMarginGradientBegin => Surface;

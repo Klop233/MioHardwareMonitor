@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using Windows.Devices.Display.Core;
 using WinRT;
 
@@ -7,7 +9,8 @@ namespace SideScreenHUD.Native;
 /// <summary>
 /// Minimal zero-dependency Direct3D 11 + IDisplayDeviceInterop bridge verified against
 /// Windows 11 SDK 10.0.26100.0 headers (d3d11.h, d3d11_1.h, Windows.Devices.Display.Core.Interop.h).
-/// Uploads BGRA32 frames into double-buffered Windows.Devices.Display.Core hardware primary surfaces.
+/// Uploads BGRA32 frames into double-buffered Windows.Devices.Display.Core hardware primary surfaces
+/// using branch-free / 32x32 cache-tiled rotation kernels.
 /// </summary>
 internal sealed unsafe class D3D11DirectPresenter : IDisposable
 {
@@ -114,8 +117,8 @@ internal sealed unsafe class D3D11DirectPresenter : IDisposable
     {
         _width = width;
         _height = height;
-        // Source capture bitmap is BGRA (DXGI_FORMAT_B8G8R8A8_UNORM = 87); swap R/B if panel uses RGBA (28)
-        _swapRedBlue = dxgiFormat == 28;
+        // Source capture bitmap is BGRA (87/91); swap R/B when the panel scanout format is RGBA8 UNORM (28) or RGBA8 sRGB (29).
+        _swapRedBlue = dxgiFormat is 28 or 29;
         uint effectiveFormat = dxgiFormat != 0 ? dxgiFormat : DXGI_FORMAT_B8G8R8A8_UNORM;
         _primaryTextures = new IntPtr[primarySurfaces.Length];
 
@@ -233,11 +236,24 @@ internal sealed unsafe class D3D11DirectPresenter : IDisposable
         }
     }
 
-    public void UploadBgraFrame(IntPtr srcPixels, int srcStride, int srcWidth, int srcHeight, int bufferIndex)
+    /// <summary>
+    /// Uploads a BGRA32 frame without rotation. Returns false on invalid input or D3D11 map failure.
+    /// </summary>
+    public bool UploadBgraFrame(IntPtr srcPixels, int srcStride, int srcWidth, int srcHeight, int bufferIndex) =>
+        UploadBgraFrame(srcPixels, srcStride, srcWidth, srcHeight, bufferIndex, 0);
+
+    /// <summary>
+    /// Uploads a BGRA32 frame, rotating it clockwise by <paramref name="rotationDegrees"/> (0/90/180/270).
+    /// For 90/270 the source frame is expected to be portrait (srcWidth == panel height).
+    /// Returns false if disposed, arguments are invalid, or D3D11 staging Map fails.
+    /// </summary>
+    public bool UploadBgraFrame(IntPtr srcPixels, int srcStride, int srcWidth, int srcHeight, int bufferIndex, int rotationDegrees)
     {
-        if (_disposed || bufferIndex < 0 || bufferIndex >= _primaryTextures.Length) return;
+        if (_disposed || bufferIndex < 0 || bufferIndex >= _primaryTextures.Length) return false;
+        if (srcPixels == IntPtr.Zero || srcStride <= 0 || srcWidth <= 0 || srcHeight <= 0) return false;
+
         IntPtr dstPrimary = _primaryTextures[bufferIndex];
-        if (dstPrimary == IntPtr.Zero || _stagingTex == IntPtr.Zero || _context == IntPtr.Zero) return;
+        if (dstPrimary == IntPtr.Zero || _stagingTex == IntPtr.Zero || _context == IntPtr.Zero) return false;
 
         var ctxVtbl = *(IntPtr**)_context;
         var map = (delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, uint, out D3D11_MAPPED_SUBRESOURCE, int>)ctxVtbl[14];
@@ -246,45 +262,31 @@ internal sealed unsafe class D3D11DirectPresenter : IDisposable
         var flush = (delegate* unmanaged[Stdcall]<IntPtr, void>)ctxVtbl[111];
 
         int hr = map(_context, _stagingTex, 0, D3D11_MAP_WRITE, 0, out D3D11_MAPPED_SUBRESOURCE mapped);
-        if (hr < 0 || mapped.pData == IntPtr.Zero) return;
+        if (hr < 0 || mapped.pData == IntPtr.Zero || mapped.RowPitch == 0) return false;
+
+        int rot = ((rotationDegrees % 360) + 360) % 360;
+        int dw = (int)_width;
+        int dh = (int)_height;
+        int dstPitch = (int)mapped.RowPitch;
+        byte* srcBase = (byte*)srcPixels;
+        byte* dstBase = (byte*)mapped.pData;
 
         try
         {
-            int copyHeight = (int)Math.Min(_height, (uint)Math.Max(0, srcHeight));
-            int copyBytesPerRow = (int)Math.Min(_width, (uint)Math.Max(0, srcWidth)) * 4;
-            int dstPitch = (int)mapped.RowPitch;
-            int rowCopyLen = Math.Min(copyBytesPerRow, Math.Min(srcStride, dstPitch));
-
-            byte* srcPtr = (byte*)srcPixels;
-            byte* dstPtr = (byte*)mapped.pData;
-
-            if (!_swapRedBlue && rowCopyLen == srcStride && rowCopyLen == dstPitch && copyHeight == _height)
+            switch (rot)
             {
-                Buffer.MemoryCopy(srcPtr, dstPtr, (long)dstPitch * copyHeight, (long)rowCopyLen * copyHeight);
-            }
-            else if (!_swapRedBlue)
-            {
-                for (int y = 0; y < copyHeight; y++)
-                {
-                    Buffer.MemoryCopy(srcPtr + (long)y * srcStride, dstPtr + (long)y * dstPitch, dstPitch, rowCopyLen);
-                }
-            }
-            else
-            {
-                int pixelCols = rowCopyLen / 4;
-                for (int y = 0; y < copyHeight; y++)
-                {
-                    byte* sRow = srcPtr + (long)y * srcStride;
-                    byte* dRow = dstPtr + (long)y * dstPitch;
-                    for (int x = 0; x < pixelCols; x++)
-                    {
-                        int off = x * 4;
-                        dRow[off + 0] = sRow[off + 2]; // R <- B
-                        dRow[off + 1] = sRow[off + 1]; // G
-                        dRow[off + 2] = sRow[off + 0]; // B <- R
-                        dRow[off + 3] = 255;           // A
-                    }
-                }
+                case 0:
+                    CopyRot0(srcBase, srcStride, srcWidth, srcHeight, dstBase, dstPitch, dw, dh, _swapRedBlue);
+                    break;
+                case 90:
+                    CopyRot90(srcBase, srcStride, srcWidth, srcHeight, dstBase, dstPitch, dw, dh, _swapRedBlue);
+                    break;
+                case 180:
+                    CopyRot180(srcBase, srcStride, srcWidth, srcHeight, dstBase, dstPitch, dw, dh, _swapRedBlue);
+                    break;
+                default:
+                    CopyRot270(srcBase, srcStride, srcWidth, srcHeight, dstBase, dstPitch, dw, dh, _swapRedBlue);
+                    break;
             }
         }
         finally
@@ -294,7 +296,306 @@ internal sealed unsafe class D3D11DirectPresenter : IDisposable
 
         copyResource(_context, dstPrimary, _stagingTex);
         flush(_context);
+        return true;
     }
+
+    private static void CopyRot0(
+        byte* srcBase, int srcStride, int srcWidth, int srcHeight,
+        byte* dstBase, int dstPitch, int dw, int dh, bool swap)
+    {
+        int maxSrcW = Math.Min(srcWidth, srcStride / 4);
+        int maxDstW = Math.Min(dw, dstPitch / 4);
+        int copyW = Math.Min(maxDstW, maxSrcW);
+        int copyH = Math.Min(dh, srcHeight);
+        int copyBytes = copyW * 4;
+        int dstRowBytes = maxDstW * 4;
+        int trailingBytes = dstRowBytes - copyBytes;
+
+        if (!swap)
+        {
+            if (copyW == maxDstW && copyH == dh && copyBytes == srcStride && copyBytes == dstPitch)
+            {
+                Buffer.MemoryCopy(srcBase, dstBase, (long)dstPitch * dh, (long)copyBytes * copyH);
+                return;
+            }
+
+            for (int y = 0; y < copyH; y++)
+            {
+                byte* dRow = dstBase + (long)y * dstPitch;
+                if (copyBytes > 0)
+                {
+                    Buffer.MemoryCopy(srcBase + (long)y * srcStride, dRow, dstPitch, copyBytes);
+                }
+                if (trailingBytes > 0)
+                {
+                    NativeMemory.Clear(dRow + copyBytes, (nuint)trailingBytes);
+                }
+            }
+        }
+        else
+        {
+            bool useSimd = Vector128.IsHardwareAccelerated && copyW >= 4;
+            Vector128<byte> shuffleMask = Vector128.Create(
+                (byte)2, 1, 0, 3,
+                6, 5, 4, 7,
+                10, 9, 8, 11,
+                14, 13, 12, 15);
+            Vector128<byte> alphaMask = Vector128.Create(
+                (byte)0, 0, 0, 255,
+                0, 0, 0, 255,
+                0, 0, 0, 255,
+                0, 0, 0, 255);
+
+            for (int y = 0; y < copyH; y++)
+            {
+                byte* sRow = srcBase + (long)y * srcStride;
+                byte* dRow = dstBase + (long)y * dstPitch;
+                int x = 0;
+
+                if (useSimd)
+                {
+                    int vecEnd = copyW - 3;
+                    for (; x < vecEnd; x += 4)
+                    {
+                        int byteOff = x * 4;
+                        Vector128<byte> v = Vector128.Load(sRow + byteOff);
+                        Vector128<byte> swapped = Vector128.Shuffle(v, shuffleMask) | alphaMask;
+                        swapped.Store(dRow + byteOff);
+                    }
+                }
+
+                uint* sU32 = (uint*)sRow;
+                uint* dU32 = (uint*)dRow;
+                for (; x < copyW; x++)
+                {
+                    dU32[x] = SwapRedBlueOpaque(sU32[x]);
+                }
+
+                if (trailingBytes > 0)
+                {
+                    NativeMemory.Clear(dRow + copyBytes, (nuint)trailingBytes);
+                }
+            }
+        }
+
+        // Zero-fill any uncovered trailing rows when srcHeight < dh
+        if (copyH < dh && dstRowBytes > 0)
+        {
+            if (dstRowBytes == dstPitch)
+            {
+                NativeMemory.Clear(dstBase + (long)copyH * dstPitch, (nuint)((long)(dh - copyH) * dstPitch));
+            }
+            else
+            {
+                for (int y = copyH; y < dh; y++)
+                {
+                    NativeMemory.Clear(dstBase + (long)y * dstPitch, (nuint)dstRowBytes);
+                }
+            }
+        }
+    }
+
+    private static void CopyRot180(
+        byte* srcBase, int srcStride, int srcWidth, int srcHeight,
+        byte* dstBase, int dstPitch, int dw, int dh, bool swap)
+    {
+        // Formula: sx = srcWidth - 1 - dx, sy = srcHeight - 1 - dy
+        int maxSrcW = Math.Min(srcWidth, srcStride / 4);
+        int maxDstW = Math.Min(dw, dstPitch / 4);
+        int dxMin = Math.Max(0, srcWidth - maxSrcW);
+        int dxMax = Math.Min(maxDstW, srcWidth);
+        int dyMax = Math.Min(dh, srcHeight);
+
+        if (dxMin > 0 || dxMax < maxDstW || dyMax < dh)
+        {
+            ClearDestination(dstBase, dstPitch, maxDstW, dh);
+        }
+
+        if (dxMin >= dxMax || dyMax <= 0) return;
+
+        int sxStart = srcWidth - 1 - dxMin;
+
+        if (!swap)
+        {
+            for (int dy = 0; dy < dyMax; dy++)
+            {
+                uint* dRow = (uint*)(dstBase + (long)dy * dstPitch);
+                uint* sRow = (uint*)(srcBase + (long)(srcHeight - 1 - dy) * srcStride);
+                int sx = sxStart;
+                for (int dx = dxMin; dx < dxMax; dx++)
+                {
+                    dRow[dx] = sRow[sx--];
+                }
+            }
+        }
+        else
+        {
+            for (int dy = 0; dy < dyMax; dy++)
+            {
+                uint* dRow = (uint*)(dstBase + (long)dy * dstPitch);
+                uint* sRow = (uint*)(srcBase + (long)(srcHeight - 1 - dy) * srcStride);
+                int sx = sxStart;
+                for (int dx = dxMin; dx < dxMax; dx++)
+                {
+                    dRow[dx] = SwapRedBlueOpaque(sRow[sx--]);
+                }
+            }
+        }
+    }
+
+    private static void CopyRot90(
+        byte* srcBase, int srcStride, int srcWidth, int srcHeight,
+        byte* dstBase, int dstPitch, int dw, int dh, bool swap)
+    {
+        // Clockwise 90 formula: sx = dy, sy = srcHeight - 1 - dx
+        const int Tile = 32;
+        int maxSrcW = Math.Min(srcWidth, srcStride / 4);
+        int maxDstW = Math.Min(dw, dstPitch / 4);
+        int dyMax = Math.Min(dh, maxSrcW);
+        int dxMax = Math.Min(maxDstW, srcHeight);
+
+        if (dyMax < dh || dxMax < maxDstW)
+        {
+            ClearDestination(dstBase, dstPitch, maxDstW, dh);
+        }
+
+        if (dyMax <= 0 || dxMax <= 0) return;
+
+        if (!swap)
+        {
+            for (int ty = 0; ty < dyMax; ty += Tile)
+            {
+                int tyEnd = Math.Min(ty + Tile, dyMax);
+                for (int tx = 0; tx < dxMax; tx += Tile)
+                {
+                    int txEnd = Math.Min(tx + Tile, dxMax);
+                    long baseSrcRowOffset = (long)(srcHeight - 1 - tx) * srcStride;
+
+                    for (int dy = ty; dy < tyEnd; dy++)
+                    {
+                        uint* dRow = (uint*)(dstBase + (long)dy * dstPitch);
+                        byte* sPtr = srcBase + baseSrcRowOffset + (long)dy * 4;
+                        for (int dx = tx; dx < txEnd; dx++)
+                        {
+                            dRow[dx] = *(uint*)sPtr;
+                            sPtr -= srcStride;
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (int ty = 0; ty < dyMax; ty += Tile)
+            {
+                int tyEnd = Math.Min(ty + Tile, dyMax);
+                for (int tx = 0; tx < dxMax; tx += Tile)
+                {
+                    int txEnd = Math.Min(tx + Tile, dxMax);
+                    long baseSrcRowOffset = (long)(srcHeight - 1 - tx) * srcStride;
+
+                    for (int dy = ty; dy < tyEnd; dy++)
+                    {
+                        uint* dRow = (uint*)(dstBase + (long)dy * dstPitch);
+                        byte* sPtr = srcBase + baseSrcRowOffset + (long)dy * 4;
+                        for (int dx = tx; dx < txEnd; dx++)
+                        {
+                            dRow[dx] = SwapRedBlueOpaque(*(uint*)sPtr);
+                            sPtr -= srcStride;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void CopyRot270(
+        byte* srcBase, int srcStride, int srcWidth, int srcHeight,
+        byte* dstBase, int dstPitch, int dw, int dh, bool swap)
+    {
+        // Clockwise 270 formula: sx = srcWidth - 1 - dy, sy = dx
+        const int Tile = 32;
+        int maxSrcW = Math.Min(srcWidth, srcStride / 4);
+        int maxDstW = Math.Min(dw, dstPitch / 4);
+        int dyMin = Math.Max(0, srcWidth - maxSrcW);
+        int dyMax = Math.Min(dh, srcWidth);
+        int dxMax = Math.Min(maxDstW, srcHeight);
+
+        if (dyMin > 0 || dyMax < dh || dxMax < maxDstW)
+        {
+            ClearDestination(dstBase, dstPitch, maxDstW, dh);
+        }
+
+        if (dyMin >= dyMax || dxMax <= 0) return;
+
+        if (!swap)
+        {
+            for (int ty = dyMin; ty < dyMax; ty += Tile)
+            {
+                int tyEnd = Math.Min(ty + Tile, dyMax);
+                for (int tx = 0; tx < dxMax; tx += Tile)
+                {
+                    int txEnd = Math.Min(tx + Tile, dxMax);
+                    long baseSrcRowOffset = (long)tx * srcStride;
+
+                    for (int dy = ty; dy < tyEnd; dy++)
+                    {
+                        uint* dRow = (uint*)(dstBase + (long)dy * dstPitch);
+                        byte* sPtr = srcBase + baseSrcRowOffset + (long)(srcWidth - 1 - dy) * 4;
+                        for (int dx = tx; dx < txEnd; dx++)
+                        {
+                            dRow[dx] = *(uint*)sPtr;
+                            sPtr += srcStride;
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (int ty = dyMin; ty < dyMax; ty += Tile)
+            {
+                int tyEnd = Math.Min(ty + Tile, dyMax);
+                for (int tx = 0; tx < dxMax; tx += Tile)
+                {
+                    int txEnd = Math.Min(tx + Tile, dxMax);
+                    long baseSrcRowOffset = (long)tx * srcStride;
+
+                    for (int dy = ty; dy < tyEnd; dy++)
+                    {
+                        uint* dRow = (uint*)(dstBase + (long)dy * dstPitch);
+                        byte* sPtr = srcBase + baseSrcRowOffset + (long)(srcWidth - 1 - dy) * 4;
+                        for (int dx = tx; dx < txEnd; dx++)
+                        {
+                            dRow[dx] = SwapRedBlueOpaque(*(uint*)sPtr);
+                            sPtr += srcStride;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static void ClearDestination(byte* dstBase, int dstPitch, int maxDstW, int dh)
+    {
+        int rowBytes = maxDstW * 4;
+        if (rowBytes <= 0 || dh <= 0) return;
+        if (rowBytes == dstPitch)
+        {
+            NativeMemory.Clear(dstBase, (nuint)((long)dstPitch * dh));
+        }
+        else
+        {
+            for (int y = 0; y < dh; y++)
+            {
+                NativeMemory.Clear(dstBase + (long)y * dstPitch, (nuint)rowBytes);
+            }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint SwapRedBlueOpaque(uint px) =>
+        0xFF000000u | ((px & 0x000000FFu) << 16) | (px & 0x0000FF00u) | ((px >> 16) & 0x000000FFu);
 
     private static IntPtr FindDxgiAdapterByLuid(uint luidLow, int luidHigh)
     {

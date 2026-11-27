@@ -1,8 +1,7 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
-using System.Windows.Media;
 using SideScreenHUD.Models;
 using SideScreenHUD.Native;
 using SideScreenHUD.Services;
@@ -19,7 +18,7 @@ public partial class UpdateWindow : Window
         _controller = controller;
         InitializeComponent();
 
-        ApplyThemeResources(_controller.Settings.Theme);
+        ApplyThemeResources(_controller.Settings.Theme, _controller.Settings.Skin, _controller.Settings.OledTrueBlack);
         SourceInitialized += (_, _) =>
         {
             var hwnd = new WindowInteropHelper(this).Handle;
@@ -50,7 +49,7 @@ public partial class UpdateWindow : Window
     {
         Dispatcher.BeginInvoke(() =>
         {
-            ApplyThemeResources(_controller.Settings.Theme);
+            ApplyThemeResources(_controller.Settings.Theme, _controller.Settings.Skin, _controller.Settings.OledTrueBlack);
             SyncTopMost();
         });
     }
@@ -65,60 +64,22 @@ public partial class UpdateWindow : Window
         Topmost = _controller.IsDisplayOpen && _controller.Settings.AlwaysOnTop;
     }
 
-    private void ApplyThemeResources(string? theme)
+    private void ApplyThemeResources(string? theme, string? skin = null, bool oledTrueBlack = false)
     {
         string norm = SettingsService.NormalizeTheme(theme);
+        string skinKey = SkinCatalog.Normalize(skin);
+        string cacheKey = $"{norm}|{skinKey}|{(oledTrueBlack ? 1 : 0)}";
         bool isDark = norm == "dark";
-        if (_appliedTheme == norm) return;
-        _appliedTheme = norm;
+        if (_appliedTheme == cacheKey) return;
+        _appliedTheme = cacheKey;
 
-        if (isDark)
-        {
-            SetBrush("BgPage", 0x0F, 0x11, 0x15);
-            SetBrush("BgSurface", 0x17, 0x1A, 0x21);
-            SetBrush("BgHover", 0x1F, 0x23, 0x2B);
-            SetBrush("BorderToken", 0x2A, 0x2F, 0x3A);
-            SetBrush("BorderStrong", 0x5E, 0x68, 0x78);
-            SetBrush("TextMuted", 0xA1, 0xA9, 0xB6);
-            SetBrush("TextMain", 0xE6, 0xE8, 0xEC);
-            SetBrush("Accent", 0x3D, 0x6F, 0xE0);
-            SetBrush("AccentHover", 0x33, 0x60, 0xCC);
-            SetBrush("AccentText", 0x7B, 0xA3, 0xF2);
-            SetBrush("AccentSubtle", 0x1B, 0x2A, 0x45);
-            SetBrush("Success", 0x4C, 0xC3, 0x8A);
-            SetBrush("SuccessSubtle", 0x15, 0x29, 0x1F);
-            SetBrush("Danger", 0xF0, 0x70, 0x5F);
-            SetBrush("DangerSubtle", 0x33, 0x19, 0x1A);
-        }
-        else
-        {
-            SetBrush("BgPage", 0xF7, 0xF8, 0xFA);
-            SetBrush("BgSurface", 0xFF, 0xFF, 0xFF);
-            SetBrush("BgHover", 0xF1, 0xF3, 0xF5);
-            SetBrush("BorderToken", 0xE4, 0xE7, 0xEC);
-            SetBrush("BorderStrong", 0x8A, 0x94, 0xA3);
-            SetBrush("TextMuted", 0x5B, 0x64, 0x72);
-            SetBrush("TextMain", 0x1F, 0x29, 0x37);
-            SetBrush("Accent", 0x2B, 0x5F, 0xD9);
-            SetBrush("AccentHover", 0x23, 0x4D, 0xB5);
-            SetBrush("AccentText", 0x2B, 0x5F, 0xD9);
-            SetBrush("AccentSubtle", 0xEA, 0xF1, 0xFB);
-            SetBrush("Success", 0x1F, 0x7A, 0x4A);
-            SetBrush("SuccessSubtle", 0xE7, 0xF4, 0xEC);
-            SetBrush("Danger", 0xB4, 0x23, 0x18);
-            SetBrush("DangerSubtle", 0xFD, 0xEC, 0xEA);
-        }
+        SkinApplier.Apply(Resources, skinKey, norm, oledTrueBlack);
 
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd != IntPtr.Zero)
         {
             Win32Interop.ApplyWindowFrame(hwnd, isDark, rounded: true);
         }
-    }
-
-    private void SetBrush(string key, byte r, byte g, byte b)
-    {
-        Resources[key] = new SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
     }
 
     public void RefreshFromState(UpdateStateSnapshot snap)

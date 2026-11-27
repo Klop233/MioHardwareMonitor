@@ -1,4 +1,4 @@
-<Window x:Class="SideScreenHUD.ControlWindow"
+﻿<Window x:Class="SideScreenHUD.ControlWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="星澪硬件监控 — 管理面板"
@@ -28,6 +28,8 @@
         <SolidColorBrush x:Key="AccentSubtle" Color="#EAF1FB" />
         <SolidColorBrush x:Key="Success" Color="#1F7A4A" />
         <SolidColorBrush x:Key="SuccessSubtle" Color="#E7F4EC" />
+        <SolidColorBrush x:Key="Warning" Color="#8A5300" />
+        <SolidColorBrush x:Key="WarningSubtle" Color="#FFF3DC" />
         <SolidColorBrush x:Key="Danger" Color="#B42318" />
         <SolidColorBrush x:Key="DangerSubtle" Color="#FDECEA" />
 
@@ -182,6 +184,59 @@
             </Setter>
         </Style>
 
+        <!-- 顶栏页面切换分段按钮 -->
+        <Style TargetType="Button" x:Key="SegButton">
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMuted}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource BgHover}" />
+                                <Setter Property="Foreground" Value="{DynamicResource TextMain}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="Button" x:Key="ActiveSegButton" BasedOn="{StaticResource SegButton}">
+            <Setter Property="Background" Value="{DynamicResource AccentSubtle}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- 固定位置预设按钮 -->
         <Style TargetType="Button" x:Key="PresetButton" BasedOn="{StaticResource SecondaryButton}">
             <Setter Property="BorderBrush" Value="{DynamicResource BorderToken}" />
@@ -195,6 +250,64 @@
             <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
             <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
             <Setter Property="FontWeight" Value="Medium" />
+        </Style>
+
+        <!-- 皮肤色块选择按钮（支持键盘聚焦与悬停反馈） -->
+        <Style TargetType="Button" x:Key="SkinChipButton">
+            <Setter Property="Background" Value="{DynamicResource BgPage}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMain}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderToken}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="8,6" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{DynamicResource BgHover}" />
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource BorderStrong}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="Button" x:Key="ActiveSkinChipButton" BasedOn="{StaticResource SkinChipButton}">
+            <Setter Property="Background" Value="{DynamicResource AccentSubtle}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}" />
+            <Setter Property="Foreground" Value="{DynamicResource AccentText}" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
 
         <!-- 下拉框：高 36px，圆角 4px -->
@@ -391,6 +504,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="56" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -410,11 +524,32 @@
                     </StackPanel>
                 </Border>
 
-                <DockPanel Grid.Column="1" Margin="20,0">
+                <DockPanel Grid.Column="1" Margin="16,0">
                     <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
-                        <Button x:Name="BtnToggleFullScreen" Content="切换整屏 / 固定窗口" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="BtnToggleFullScreen_Click" />
-                        <Button x:Name="BtnCloseDisplay" Content="关闭监控窗口" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="BtnCloseDisplay_Click" />
-                        <Button x:Name="BtnOpenOrRecreate" Content="重建监控窗口" Style="{StaticResource PrimaryButton}" Click="BtnOpenOrRecreate_Click" />
+                        <Border Background="{DynamicResource BgPage}"
+                                BorderBrush="{DynamicResource BorderToken}"
+                                BorderThickness="1"
+                                CornerRadius="6"
+                                Padding="2"
+                                Margin="0,0,10,0"
+                                VerticalAlignment="Center"
+                                ToolTip="一键切换监控画面页面（硬件独占模式下可远程翻页 · Ctrl+Tab / Alt+1 / Alt+2）">
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="BtnTopPageOverview"
+                                        Content="硬件总览"
+                                        Tag="overview"
+                                        Style="{StaticResource ActiveSegButton}"
+                                        Click="BtnMonitorPage_Click" />
+                                <Button x:Name="BtnTopPageProcTree"
+                                        Content="进程树"
+                                        Tag="proctree"
+                                        Style="{StaticResource SegButton}"
+                                        Click="BtnMonitorPage_Click" />
+                            </StackPanel>
+                        </Border>
+                        <Button x:Name="BtnToggleFullScreen" Content="切换整屏 / 固定窗口" Style="{StaticResource SecondaryButton}" Padding="12,0" Margin="0,0,8,0" Click="BtnToggleFullScreen_Click" />
+                        <Button x:Name="BtnCloseDisplay" Content="关闭监控窗口" Style="{StaticResource SecondaryButton}" Padding="12,0" Margin="0,0,8,0" Click="BtnCloseDisplay_Click" />
+                        <Button x:Name="BtnOpenOrRecreate" Content="重建监控窗口" Style="{StaticResource PrimaryButton}" Padding="14,0" Click="BtnOpenOrRecreate_Click" />
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -432,8 +567,40 @@
             </Grid>
         </Border>
 
+        <!-- Slim Top-Level Non-Admin Elevation Hint Banner -->
+        <Border x:Name="ElevationBanner"
+                Grid.Row="1"
+                Visibility="Collapsed"
+                Background="{DynamicResource WarningSubtle}"
+                BorderBrush="{DynamicResource Warning}"
+                BorderThickness="0,0,0,1"
+                Padding="20,6">
+            <DockPanel LastChildFill="True">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center">
+                    <Button Content="一键管理员重启"
+                            Style="{StaticResource SecondaryButton}"
+                            Height="28"
+                            Padding="10,0"
+                            Margin="0,0,8,0"
+                            Click="BtnElevate_Click" />
+                    <Button Content="本次隐藏"
+                            Style="{StaticResource SecondaryButton}"
+                            Height="28"
+                            Padding="10,0"
+                            Click="BtnDismissElevationBanner_Click" />
+                </StackPanel>
+                <TextBlock Text="当前以标准权限运行：CPU 封装温度、主板风扇转速与部分功耗传感器受限"
+                           Foreground="{DynamicResource Warning}"
+                           FontSize="13"
+                           FontWeight="Medium"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Margin="0,0,12,0" />
+            </DockPanel>
+        </Border>
+
         <!-- Body: Left Navigation Rail (216px) + Right 16:9 Content Pane -->
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="216" />
                 <ColumnDefinition Width="*" />
@@ -445,9 +612,9 @@
                     <StackPanel DockPanel.Dock="Bottom">
                         <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
                             <StackPanel>
-                                <TextBlock Text="F11 整屏 · Esc 退出 · Ctrl+, 设置"
+                                <TextBlock Text="F11 整屏 · Esc 退出整屏 · Ctrl+Tab 切页 · Ctrl+, 设置 · Ctrl+1~9 切屏"
                                            Foreground="{DynamicResource TextMuted}"
-                                           FontSize="14"
+                                           FontSize="13"
                                            TextWrapping="Wrap"
                                            Margin="4,0,4,10" />
                                 <Button Content="隐藏设置窗口" Style="{StaticResource SecondaryButton}" Margin="0,0,0,8" Click="BtnHideToTray_Click" />
@@ -461,6 +628,7 @@
                         <Button x:Name="BtnNavWindow" Content="窗口与固定位置" Tag="window" Style="{StaticResource ActiveNavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavMonitor" Content="外观与硬件监控" Tag="monitor" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavLayout" Content="自定义排版" Tag="layout" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
+                        <Button x:Name="BtnNavPro" Content="告警、录制与配置" Tag="pro" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavMarket" Content="行情、K 线与标的" Tag="market" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                         <Button x:Name="BtnNavDonate" Content="赞助支持" Tag="donate" Style="{StaticResource NavButton}" Click="BtnNav_Click" />
                     </StackPanel>
@@ -556,6 +724,14 @@
                                         <ComboBoxItem Tag="30" Content="30 FPS（高刷输出）" />
                                     </ComboBox>
 
+                                    <TextBlock Text="画面旋转（屏幕倒装 / 竖装时调整）" Style="{StaticResource FieldLabel}" />
+                                    <ComboBox x:Name="ComboDirectRotation" Style="{StaticResource SpecCombo}" Margin="0,0,0,12" SelectionChanged="ComboDirectRotation_SelectionChanged">
+                                        <ComboBoxItem Tag="0" Content="0°（不旋转）" />
+                                        <ComboBoxItem Tag="90" Content="顺时针 90°（竖屏）" />
+                                        <ComboBoxItem Tag="180" Content="180°（上下颠倒）" />
+                                        <ComboBoxItem Tag="270" Content="顺时针 270°（竖屏 · 反向）" />
+                                    </ComboBox>
+
                                     <Border x:Name="DirectInfoBox"
                                             Background="{DynamicResource BgPage}"
                                             BorderBrush="{DynamicResource BorderToken}"
@@ -568,6 +744,22 @@
                                                    FontSize="14"
                                                    Foreground="{DynamicResource TextMuted}"
                                                    TextWrapping="Wrap" />
+                                    </Border>
+
+                                    <Border x:Name="DirectDiagBox"
+                                            Visibility="Collapsed"
+                                            Background="{DynamicResource BgPage}"
+                                            BorderBrush="{DynamicResource BorderToken}"
+                                            BorderThickness="1"
+                                            CornerRadius="4"
+                                            Padding="10,6"
+                                            Margin="0,0,0,10">
+                                        <TextBlock x:Name="TxtDirectDiagStats"
+                                                   FontFamily="JetBrains Mono, Consolas, Noto Sans SC"
+                                                   FontSize="13"
+                                                   Foreground="{DynamicResource TextMain}"
+                                                   TextWrapping="Wrap"
+                                                   Text="—" />
                                     </Border>
 
                                     <DockPanel LastChildFill="False">
@@ -671,8 +863,9 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
-                        <!-- Left Card: Appearance & Hardware Display -->
-                        <Border Grid.Column="0" Style="{StaticResource SectionCard}" VerticalAlignment="Top">
+                        <!-- Left Column: Appearance & Hardware Display + Page/Process Tree Remote Control -->
+                        <StackPanel Grid.Column="0">
+                        <Border Style="{StaticResource SectionCard}" Margin="0,0,0,16">
                             <StackPanel>
                                 <TextBlock Text="监控画面与硬件显示" FontSize="16" FontWeight="Medium" Margin="0,0,0,14" />
 
@@ -685,9 +878,9 @@
                                     <StackPanel Grid.Column="0">
                                         <TextBlock Text="布局视图" Style="{StaticResource FieldLabel}" />
                                         <ComboBox x:Name="ComboLayout" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
-                                            <ComboBoxItem Tag="split" Content="综合看板（性能 + K 线）" />
+                                            <ComboBoxItem x:Name="ItemLayoutSplit" Tag="split" Content="综合看板（性能 + K 线）" />
                                             <ComboBoxItem Tag="hardware" Content="性能专注模式" />
-                                            <ComboBoxItem Tag="market" Content="行情专注模式" />
+                                            <ComboBoxItem x:Name="ItemLayoutMarket" Tag="market" Content="行情专注模式" />
                                             <ComboBoxItem Tag="custom" Content="自定义排版" />
                                         </ComboBox>
                                     </StackPanel>
@@ -707,33 +900,35 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="涨跌色系" Style="{StaticResource FieldLabel}" />
-                                        <ComboBox x:Name="ComboColors" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
-                                            <ComboBoxItem Tag="cn" Content="红涨绿跌（国内）" />
-                                            <ComboBoxItem Tag="global" Content="绿涨红跌（国际）" />
+                                        <TextBlock Text="监控画面风格" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboHudStyle" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
+                                            <ComboBoxItem Tag="instrument" Content="精密仪器（仪表盘 · 推荐）" />
+                                            <ComboBoxItem Tag="flat" Content="星澪扁平（经典极简）" />
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
-                                        <TextBlock Text="采样周期" Style="{StaticResource FieldLabel}" />
-                                        <ComboBox x:Name="ComboInterval" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
-                                            <ComboBoxItem Tag="500" Content="0.5 秒" />
-                                            <ComboBoxItem Tag="1000" Content="1.0 秒（推荐）" />
-                                            <ComboBoxItem Tag="2000" Content="2.0 秒" />
+                                        <TextBlock Text="采样刷新周期" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboTelemetryInterval" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
+                                            <ComboBoxItem Tag="500" Content="0.5 秒（最流畅 · 占用较高）" />
+                                            <ComboBoxItem Tag="1000" Content="1.0 秒（高响应）" />
+                                            <ComboBoxItem Tag="1500" Content="1.5 秒（推荐 · 默认）" />
+                                            <ComboBoxItem Tag="3000" Content="3.0 秒（最省电）" />
                                         </ComboBox>
                                     </StackPanel>
                                 </Grid>
 
-                                <Grid>
+                                <Grid Margin="0,0,0,12">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="12" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0">
-                                        <TextBlock Text="CPU 视图模式" Style="{StaticResource FieldLabel}" />
-                                        <ComboBox x:Name="ComboCpuView" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
-                                            <ComboBoxItem Tag="cores" Content="所有逻辑处理器（任务管理器）" />
-                                            <ComboBoxItem Tag="overall" Content="总体利用率曲线" />
+                                        <TextBlock Text="性能模式（决定传感器刷新频率）" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboPerfMode" Style="{StaticResource SpecCombo}" SelectionChanged="ComboPerfMode_Changed">
+                                            <ComboBoxItem Tag="eco" Content="节能 · 低占用（温度功耗 6 秒/次）" />
+                                            <ComboBoxItem Tag="balanced" Content="均衡 · 默认（温度功耗 3 秒/次）" />
+                                            <ComboBoxItem Tag="realtime" Content="实时 · 高精度（温度功耗 1 秒/次）" />
                                         </ComboBox>
                                     </StackPanel>
                                     <StackPanel Grid.Column="2">
@@ -744,6 +939,38 @@
                                         </ComboBox>
                                     </StackPanel>
                                 </Grid>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel x:Name="PanelCpuViewField" Grid.Column="0">
+                                        <TextBlock Text="CPU 视图模式" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboCpuView" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
+                                            <ComboBoxItem Tag="compact" Content="紧凑核心格（推荐 · 省空间）" />
+                                            <ComboBoxItem Tag="cores" Content="完整多核曲线（任务管理器）" />
+                                            <ComboBoxItem Tag="overall" Content="仅总体曲线" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel x:Name="PanelColorSchemeField" Grid.Column="2">
+                                        <TextBlock Text="涨跌色系" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboColors" Style="{StaticResource SpecCombo}" SelectionChanged="ComboVisual_Changed">
+                                            <ComboBoxItem Tag="cn" Content="红涨绿跌（国内）" />
+                                            <ComboBoxItem Tag="global" Content="绿涨红跌（国际）" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Text="配色皮肤（与主题叠加，同步作用于管理面板与监控窗口）" Style="{StaticResource FieldLabel}" Margin="0,12,0,6" />
+                                <UniformGrid x:Name="SkinSwatchGrid" Rows="2" Columns="3" Margin="0,0,0,2" />
+                                <CheckBox x:Name="ChkOledTrueBlack"
+                                          Content="OLED 纯黑模式（深色主题下启用 #000000 护屏纯黑背景）"
+                                          Style="{StaticResource SpecCheck}"
+                                          Margin="0,8,0,0"
+                                          Checked="ChkOption_Changed"
+                                          Unchecked="ChkOption_Changed" />
 
                                 <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Margin="0,14,0,0" Padding="0,12,0,0">
                                     <StackPanel>
@@ -767,6 +994,88 @@
                             </StackPanel>
                         </Border>
 
+                        <!-- Page Switcher & Process/Thread Tree Remote Control Card -->
+                        <Border Style="{StaticResource SectionCard}">
+                            <StackPanel>
+                                <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                                    <TextBlock Text="页面切换与进程线程树控制" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                    <Border x:Name="ProcTreeStatusBadge" CornerRadius="99" Padding="10,3" Background="{DynamicResource BorderToken}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                        <TextBlock x:Name="TxtProcTreeStatusText" Text="硬件总览" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                    </Border>
+                                </DockPanel>
+
+                                <TextBlock Text="当前监控页面" Style="{StaticResource FieldLabel}" />
+                                <ComboBox x:Name="ComboMonitorPage" Style="{StaticResource SpecCombo}" Margin="0,0,0,12" SelectionChanged="ComboMonitorPage_Changed">
+                                    <ComboBoxItem Tag="overview" Content="硬件监控总览（默认 · 零进程树开销）" />
+                                    <ComboBoxItem Tag="proctree" Content="进程与线程树（Process Hacker 风格）" />
+                                </ComboBox>
+
+                                <Grid Margin="0,0,0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="12" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <TextBlock Text="进程列表视图" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboProcTreeViewMode" Style="{StaticResource SpecCombo}" SelectionChanged="ComboProcTreeOption_Changed">
+                                            <ComboBoxItem Tag="tree" Content="树状层级（父子进程树）" />
+                                            <ComboBoxItem Tag="flat" Content="扁平排行（高负载优先）" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="进程树排序依据" Style="{StaticResource FieldLabel}" />
+                                        <ComboBox x:Name="ComboProcTreeSortBy" Style="{StaticResource SpecCombo}" SelectionChanged="ComboProcTreeOption_Changed">
+                                            <ComboBoxItem Tag="cpu" Content="按 CPU 占用" />
+                                            <ComboBoxItem Tag="mem" Content="按内存占用" />
+                                            <ComboBoxItem Tag="io" Content="按磁盘 I/O" />
+                                            <ComboBoxItem Tag="threads" Content="按线程数量" />
+                                            <ComboBoxItem Tag="handles" Content="按句柄数量" />
+                                            <ComboBoxItem Tag="pid" Content="按 PID 编号" />
+                                            <ComboBoxItem Tag="name" Content="按进程名称" />
+                                        </ComboBox>
+                                    </StackPanel>
+                                </Grid>
+
+                                <CheckBox x:Name="ChkProcTreeAutoFollow"
+                                          Content="自动追踪最高负载进程（独占屏幕推荐）"
+                                          Style="{StaticResource SpecCheck}"
+                                          Margin="0,0,0,10"
+                                          Checked="ChkProcTreeAutoFollow_Changed"
+                                          Unchecked="ChkProcTreeAutoFollow_Changed" />
+
+                                <TextBlock Text="线程剖析目标进程（远程锁定）" Style="{StaticResource FieldLabel}" />
+                                <ComboBox x:Name="ComboProcTreeTarget"
+                                          Style="{StaticResource SpecCombo}"
+                                          Margin="0,0,0,10"
+                                          SelectionChanged="ComboProcTreeTarget_Changed"
+                                          DropDownClosed="ComboProcTreeTarget_DropDownClosed" />
+
+                                <TextBlock Text="进程名称 / PID 筛选" Style="{StaticResource FieldLabel}" />
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="TxtProcTreeFilter"
+                                             Grid.Column="0"
+                                             Style="{StaticResource SpecTextBox}"
+                                             FontFamily="JetBrains Mono, Consolas, Noto Sans SC"
+                                             Tag="输入进程名或 PID（回车生效）"
+                                             KeyDown="ProcTreeFilter_KeyDown" />
+                                    <Button Grid.Column="1" Content="筛选" Style="{StaticResource SecondaryButton}" Padding="12,0" Margin="8,0,0,0" Click="BtnApplyProcTreeFilter_Click" />
+                                    <Button Grid.Column="2" Content="清除" Style="{StaticResource SecondaryButton}" Padding="12,0" Margin="6,0,0,0" Click="BtnClearProcTreeFilter_Click" />
+                                </Grid>
+
+                                <TextBlock Text="桌面窗口模式可在监控画面中直接点击进程行、展开节点或按 Ctrl+Tab / Alt+1 / Alt+2 切页；硬件独占模式无鼠标交互，可在此面板、顶栏按钮或托盘菜单远程翻页并锁定线程剖析目标。"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           FontSize="13"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                        </StackPanel>
+
                         <!-- Right Column: Network IP Control + Startup/Elevation -->
                         <StackPanel Grid.Column="2">
                             <Border Style="{StaticResource SectionCard}" Margin="0,0,0,16">
@@ -784,12 +1093,22 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="8" />
                                             <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="8" />
+                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
                                         <TextBlock Grid.Row="0" Grid.Column="0" Text="国内站 IP" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
                                         <TextBlock x:Name="TxtDomesticIpInfo" Grid.Row="0" Grid.Column="1" Text="检测中" FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="14" TextTrimming="CharacterEllipsis" />
                                         <TextBlock Grid.Row="2" Grid.Column="0" Text="国外站 IP" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
                                         <TextBlock x:Name="TxtOverseasIpInfo" Grid.Row="2" Grid.Column="1" Text="检测中" FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="14" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Row="4" Grid.Column="0" Text="网络延迟" FontSize="14" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                        <TextBlock x:Name="TxtNetworkPingInfo" Grid.Row="4" Grid.Column="1" Text="探测中" FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="14" TextTrimming="CharacterEllipsis" />
                                     </Grid>
+                                    <CheckBox x:Name="ChkMaskPublicIp"
+                                              Content="隐私模式：隐藏公网 IP 中间段（直播 / 截图防泄露）"
+                                              Style="{StaticResource SpecCheck}"
+                                              Margin="0,8,0,0"
+                                              Checked="ChkOption_Changed"
+                                              Unchecked="ChkOption_Changed" />
                                 </StackPanel>
                             </Border>
 
@@ -805,7 +1124,7 @@
                                                Margin="22,0,0,6" />
                                     <CheckBox x:Name="ChkAutoOpenDisplay" Content="手动启动时自动打开监控窗口" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
                                     <CheckBox x:Name="ChkShowControl" Content="手动启动时打开管理面板" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
-                                    <CheckBox x:Name="ChkMinTray" Content="关闭管理面板时隐藏到系统托盘" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
+                                    <CheckBox x:Name="ChkMinTray" Content="关闭管理面板时隐藏到系统托盘（监控窗口打开时保持后台运行）" Style="{StaticResource SpecCheck}" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
                                     <CheckBox x:Name="ChkOled" Content="OLED 防烧屏微位移" Style="{StaticResource SpecCheck}" Margin="0,0,0,10" Checked="ChkOption_Changed" Unchecked="ChkOption_Changed" />
 
                                     <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
@@ -828,12 +1147,12 @@
                                     <DockPanel LastChildFill="False" Margin="0,0,0,10">
                                         <TextBlock Text="软件更新" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
                                         <Border CornerRadius="99" Padding="10,3" Background="{DynamicResource BorderToken}" DockPanel.Dock="Right" VerticalAlignment="Center">
-                                            <TextBlock x:Name="TxtCurrentVersionBadge" Text="v1.2.0" FontFamily="JetBrains Mono, Consolas" FontSize="14" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock x:Name="TxtCurrentVersionBadge" Text="—" FontFamily="JetBrains Mono, Consolas" FontSize="14" Foreground="{DynamicResource TextMuted}" />
                                         </Border>
                                     </DockPanel>
 
                                     <TextBlock x:Name="TxtUpdateStatusSummary"
-                                               Text="当前版本：v1.2.0"
+                                               Text="—"
                                                FontSize="14"
                                                Foreground="{DynamicResource TextMain}"
                                                TextWrapping="Wrap"
@@ -903,11 +1222,11 @@
                                 <!-- One-Click Layout Presets -->
                                 <WrapPanel Margin="0,0,0,8">
                                     <TextBlock Text="预设模板：" FontSize="14" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="0,0,6,4" />
-                                    <Button Content="综合看板" Tag="split" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
+                                    <Button x:Name="BtnPresetSplit" Content="综合看板" Tag="split" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
                                     <Button Content="纯硬件大屏" Tag="hardware" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
                                     <Button Content="竖屏副屏" Tag="portrait" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
                                     <Button Content="机箱长条屏" Tag="bar" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnLayoutPreset_Click" />
-                                    <Button Content="极简盯盘" Tag="trading" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,0,4" Click="BtnLayoutPreset_Click" />
+                                    <Button x:Name="BtnPresetTrading" Content="极简盯盘" Tag="trading" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,0,4" Click="BtnLayoutPreset_Click" />
                                 </WrapPanel>
 
                                 <!-- Interactive Drag & Resize Grid Canvas -->
@@ -924,6 +1243,21 @@
                                             SizeChanged="LayoutEditorCanvas_SizeChanged"
                                             MouseMove="LayoutEditorCanvas_MouseMove"
                                             MouseLeftButtonUp="LayoutEditorCanvas_MouseLeftButtonUp" />
+                                </Border>
+
+                                <Border x:Name="LayoutOverlapBanner"
+                                        Visibility="Collapsed"
+                                        Background="{DynamicResource DangerSubtle}"
+                                        BorderBrush="{DynamicResource Danger}"
+                                        BorderThickness="1"
+                                        CornerRadius="4"
+                                        Padding="10,6"
+                                        Margin="0,0,0,8">
+                                    <TextBlock Text="检测到卡片位置重叠，可拖动调整或点击「防重叠整理」一键排布。"
+                                               Foreground="{DynamicResource Danger}"
+                                               FontSize="13"
+                                               FontWeight="Medium"
+                                               TextWrapping="Wrap" />
                                 </Border>
 
                                 <DockPanel LastChildFill="False">
@@ -1082,7 +1416,218 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- ==================== TAB 4: 行情、K 线与标的 ==================== -->
+                    <!-- ==================== TAB 4: 告警、录制与配置 ==================== -->
+                    <Grid x:Name="PanelPro" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="16" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Left Column: Thermal & Load Alerts + Network Ping Target -->
+                        <StackPanel Grid.Column="0">
+                            <Border Style="{StaticResource SectionCard}" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <DockPanel LastChildFill="False" Margin="0,0,0,10">
+                                        <TextBlock Text="硬件温控与负载告警" FontSize="16" FontWeight="Medium" VerticalAlignment="Center" DockPanel.Dock="Left" />
+                                        <Border x:Name="ProAlertStatusBadge" CornerRadius="99" Padding="10,3" Background="{DynamicResource SuccessSubtle}" DockPanel.Dock="Right" VerticalAlignment="Center">
+                                            <TextBlock x:Name="TxtProAlertStatusText" Text="状态正常" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource Success}" />
+                                        </Border>
+                                    </DockPanel>
+
+                                    <CheckBox x:Name="ChkAlertsEnabled" Content="启用智能温控与负载告警" Style="{StaticResource SpecCheck}" Checked="ChkAlertOption_Changed" Unchecked="ChkAlertOption_Changed" />
+                                    <CheckBox x:Name="ChkAlertTrayNotify" Content="触发告警时弹出系统托盘通知" Style="{StaticResource SpecCheck}" Margin="0,0,0,8" Checked="ChkAlertOption_Changed" Unchecked="ChkAlertOption_Changed" />
+
+                                    <WrapPanel Margin="0,0,0,10">
+                                        <TextBlock Text="场景预设：" FontSize="14" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" Margin="0,0,6,4" />
+                                        <Button Content="静音办公" Tag="quiet" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnAlertPreset_Click" />
+                                        <Button Content="游戏常规" Tag="gaming" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnAlertPreset_Click" />
+                                        <Button Content="超频严苛" Tag="oc" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,0,4" Click="BtnAlertPreset_Click" />
+                                    </WrapPanel>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="12" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="10" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="10" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="10" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <StackPanel Grid.Row="0" Grid.Column="0">
+                                            <TextBlock Text="CPU 警告温度 (°C)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertCpuWarn" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="80" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="0" Grid.Column="2">
+                                            <TextBlock Text="CPU 危险温度 (°C)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertCpuCrit" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="92" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="2" Grid.Column="0">
+                                            <TextBlock Text="GPU 警告温度 (°C)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertGpuWarn" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="78" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="2" Grid.Column="2">
+                                            <TextBlock Text="GPU 危险温度 (°C)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertGpuCrit" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="88" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="4" Grid.Column="0">
+                                            <TextBlock Text="内存警告占比 (%)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertRamWarn" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="88" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Row="4" Grid.Column="2">
+                                            <TextBlock Text="磁盘警告占比 (%)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertDiskWarn" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="90" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Row="6" Grid.Column="0">
+                                            <TextBlock Text="通知冷却秒数 (15~600)" Style="{StaticResource FieldLabel}" />
+                                            <TextBox x:Name="TxtAlertCooldown" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="60" KeyDown="AlertInput_KeyDown" />
+                                        </StackPanel>
+                                        <Button Grid.Row="6" Grid.Column="2" Content="应用阈值" Style="{StaticResource PrimaryButton}" VerticalAlignment="Bottom" Click="BtnApplyAlerts_Click" />
+                                    </Grid>
+
+                                    <Border Background="{DynamicResource BgPage}"
+                                            BorderBrush="{DynamicResource BorderToken}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="10,8"
+                                            Margin="0,12,0,0">
+                                        <TextBlock x:Name="TxtActiveAlertsDetail"
+                                                   Text="当前各项传感器均在安全阈值内。"
+                                                   FontSize="13"
+                                                   Foreground="{DynamicResource TextMuted}"
+                                                   TextWrapping="Wrap" />
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource SectionCard}">
+                                <StackPanel>
+                                    <TextBlock Text="网络延迟监测目标 (ICMP Ping)" FontSize="16" FontWeight="Medium" Margin="0,0,0,10" />
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="TxtPingTarget" Grid.Column="0" Style="{StaticResource SpecTextBox}" FontFamily="JetBrains Mono, Consolas" Tag="223.5.5.5" KeyDown="PingTarget_KeyDown" />
+                                        <Button Grid.Column="1" Content="应用" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="BtnApplyPingTarget_Click" />
+                                    </Grid>
+                                    <WrapPanel Margin="0,0,0,10">
+                                        <Button Content="223.5.5.5 (阿里)" Tag="223.5.5.5" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnPingPreset_Click" />
+                                        <Button Content="119.29.29.29 (腾讯)" Tag="119.29.29.29" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,6,4" Click="BtnPingPreset_Click" />
+                                        <Button Content="1.1.1.1 (CF)" Tag="1.1.1.1" Style="{StaticResource SecondaryButton}" Height="30" Padding="10,0" Margin="0,0,0,4" Click="BtnPingPreset_Click" />
+                                    </WrapPanel>
+                                    <TextBlock x:Name="TxtProPingReadout"
+                                               Text="正在探测网络延迟..."
+                                               FontFamily="JetBrains Mono, Consolas, Noto Sans SC"
+                                               FontSize="13"
+                                               Foreground="{DynamicResource TextMuted}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <!-- Right Column: Live Diagnostics, Session Peaks, CSV Recorder & Profile Sharing -->
+                        <StackPanel Grid.Column="2">
+                            <Border Style="{StaticResource SectionCard}" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock Text="运行诊断、峰值与 CSV 遥测录制" FontSize="16" FontWeight="Medium" Margin="0,0,0,12" />
+
+                                    <Border Background="{DynamicResource BgPage}"
+                                            BorderBrush="{DynamicResource BorderToken}"
+                                            BorderThickness="1"
+                                            CornerRadius="6"
+                                            Padding="12,10"
+                                            Margin="0,0,0,12">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="92" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="8" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="8" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="8" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="本软件开销" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock x:Name="TxtDiagSelfFootprint" Grid.Row="0" Grid.Column="1" Text="正在统计..." FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="13" Foreground="{DynamicResource TextMain}" TextWrapping="Wrap" />
+
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="采集与权限" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock x:Name="TxtDiagSensorMode" Grid.Row="2" Grid.Column="1" Text="—" FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="13" Foreground="{DynamicResource TextMain}" TextWrapping="Wrap" />
+
+                                            <TextBlock Grid.Row="4" Grid.Column="0" Text="硬件独占直出" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock x:Name="TxtDiagDirectInfo" Grid.Row="4" Grid.Column="1" Text="未激活" FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="13" Foreground="{DynamicResource TextMain}" TextWrapping="Wrap" />
+
+                                            <TextBlock Grid.Row="6" Grid.Column="0" Text="会话峰值统计" FontSize="13" FontWeight="Medium" Foreground="{DynamicResource TextMuted}" />
+                                            <TextBlock x:Name="TxtDiagSessionInfo" Grid.Row="6" Grid.Column="1" Text="等待首次采样..." FontFamily="JetBrains Mono, Consolas, Noto Sans SC" FontSize="13" Foreground="{DynamicResource TextMain}" TextWrapping="Wrap" />
+                                        </Grid>
+                                    </Border>
+
+                                    <DockPanel LastChildFill="False" Margin="0,0,0,12">
+                                        <Button x:Name="BtnResetPeaks" Content="重置会话峰值" Style="{StaticResource SecondaryButton}" DockPanel.Dock="Left" Click="BtnResetPeaks_Click" />
+                                        <TextBlock Text="清空本轮最高/最低温度与峰值记录" FontSize="13" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center" DockPanel.Dock="Right" />
+                                    </DockPanel>
+
+                                    <Border BorderBrush="{DynamicResource BorderToken}" BorderThickness="0,1,0,0" Padding="0,12,0,0">
+                                        <StackPanel>
+                                            <TextBlock Text="CSV 遥测数据录制" Style="{StaticResource FieldLabel}" Margin="0,0,0,6" />
+                                            <TextBlock x:Name="TxtRecordingSummary"
+                                                       Text="未录制 · 日志将保存至 文档\MioHardwareMonitor\Logs"
+                                                       FontFamily="JetBrains Mono, Consolas, Noto Sans SC"
+                                                       FontSize="13"
+                                                       Foreground="{DynamicResource TextMuted}"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,0,0,10" />
+                                            <StackPanel Orientation="Horizontal">
+                                                <Button x:Name="BtnToggleRecording" Content="开始录制 CSV" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="BtnToggleRecording_Click" />
+                                                <Button Content="打开日志目录" Style="{StaticResource SecondaryButton}" Click="BtnOpenLogsFolder_Click" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <Border Style="{StaticResource SectionCard}">
+                                <StackPanel>
+                                    <TextBlock Text="配置方案备份与跨机分享 (.miohud.json)" FontSize="16" FontWeight="Medium" Margin="0,0,0,8" />
+                                    <TextBlock Text="一键备份或跨设备分享你的配色皮肤、OLED 纯黑模式、监控画面风格、自定义网格排版与温控告警阈值。"
+                                               FontSize="14"
+                                               Foreground="{DynamicResource TextMuted}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,0,0,10" />
+                                    <CheckBox x:Name="ChkExportIncludePlacement"
+                                              Content="导出时包含本机显示器与窗口坐标（跨机分享建议取消勾选）"
+                                              Style="{StaticResource SpecCheck}"
+                                              Margin="0,0,0,12" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Button Content="导出配置文件" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0" Click="BtnExportProfile_Click" />
+                                        <Button Content="导入配置文件" Style="{StaticResource SecondaryButton}" Click="BtnImportProfile_Click" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="TxtProfileStatus"
+                                               Text="支持 .miohud.json 与标准 settings.json 格式，导入前可预览方案摘要。"
+                                               FontSize="13"
+                                               Foreground="{DynamicResource TextMuted}"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- ==================== TAB 5: 行情、K 线与标的 ==================== -->
                     <Grid x:Name="PanelMarket" Visibility="Collapsed">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

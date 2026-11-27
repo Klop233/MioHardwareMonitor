@@ -15,7 +15,7 @@
     <RootNamespace>SideScreenHUD</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <Version>1.5.0</Version>
+    <Version>1.6.0</Version>
     <Product>SideScreen HUD - 副屏信息仪表盘</Product>
   </PropertyGroup>
 

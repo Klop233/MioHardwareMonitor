@@ -1,4 +1,4 @@
-using System.Windows;
+﻿using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -33,6 +33,11 @@ public partial class ControlWindow : Window
     private bool _suppressEvents;
     private bool _allowClose;
     private bool _initialPlaced;
+    private bool _elevationBannerDismissed;
+    private DateTime _lastTelemetryUiUtc = DateTime.MinValue;
+    private DateTime _lastProcTreeUiUtc = DateTime.MinValue;
+    private int _lastProcTreeActivePid = -1;
+    private bool _procTreeRefreshPendingAfterDropDown;
     private string? _appliedTheme;
     private List<MonitorDescriptor> _monitors = new();
     private readonly System.Windows.Controls.Button[] _presetButtons;
@@ -62,21 +67,80 @@ public partial class ControlWindow : Window
             BtnPresetBottomLeft, BtnPresetBottomHalf, BtnPresetBottomRight
         };
 
-        _navButtons = new[] { BtnNavWindow, BtnNavMonitor, BtnNavLayout, BtnNavMarket, BtnNavDonate };
         _donateAmountButtons = new[] { BtnDonate6, BtnDonate18, BtnDonate36, BtnDonate66, BtnDonate128, BtnDonateCustom };
 
-        PopulateFxCurrencyCombos();
-        ApplyThemeResources(_controller.Settings.Theme);
-        UpdateAddSymbolPlaceholders();
+        // Feature-gated tabs: build navigation list dynamically so hidden surfaces stay unreachable.
+        BtnNavMarket.Visibility = AppFeatures.MarketEnabled ? Visibility.Visible : Visibility.Collapsed;
+        BtnNavDonate.Visibility = AppFeatures.DonationEnabled ? Visibility.Visible : Visibility.Collapsed;
+        var navList = new List<System.Windows.Controls.Button>
+        {
+            BtnNavWindow, BtnNavMonitor, BtnNavLayout, BtnNavPro
+        };
+        if (AppFeatures.MarketEnabled) navList.Add(BtnNavMarket);
+        if (AppFeatures.DonationEnabled) navList.Add(BtnNavDonate);
+        _navButtons = navList.ToArray();
+
+        // Hide market-only color scheme field cleanly when market is disabled and span CPU view cleanly.
+        PanelColorSchemeField.Visibility = AppFeatures.MarketEnabled ? Visibility.Visible : Visibility.Collapsed;
+        Grid.SetColumnSpan(PanelCpuViewField, AppFeatures.MarketEnabled ? 1 : 3);
+
+        // Layout presets that depend on the market surface are hidden together with it.
+        var marketPresetVisibility = AppFeatures.MarketEnabled ? Visibility.Visible : Visibility.Collapsed;
+        BtnPresetSplit.Visibility = marketPresetVisibility;
+        BtnPresetTrading.Visibility = marketPresetVisibility;
+        ItemLayoutSplit.Visibility = marketPresetVisibility;
+        ItemLayoutMarket.Visibility = marketPresetVisibility;
+        if (!AppFeatures.MarketEnabled)
+        {
+            // Removing items can change the ComboBox selection; suppress the handler so it never
+            // writes placeholder defaults over the user's saved settings during construction.
+            _suppressEvents = true;
+            try
+            {
+                ComboLayout.Items.Remove(ItemLayoutSplit);
+                ComboLayout.Items.Remove(ItemLayoutMarket);
+            }
+            finally
+            {
+                _suppressEvents = false;
+            }
+        }
+
+        BuildSkinSwatches();
+        if (AppFeatures.MarketEnabled)
+        {
+            PopulateFxCurrencyCombos();
+            UpdateAddSymbolPlaceholders();
+        }
+        ApplyThemeResources(_controller.Settings.Theme, _controller.Settings.Skin, _controller.Settings.OledTrueBlack);
 
         SourceInitialized += ControlWindow_SourceInitialized;
         Loaded += (_, _) =>
         {
             PlaceControlWindowOnce();
             RefreshFromController();
+            RefreshLiveTelemetryUi(_controller.LastTelemetry);
+            RefreshRecordingUi(_controller.RecordingStatus);
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            if (IsVisible)
+            {
+                _lastTelemetryUiUtc = DateTime.MinValue;
+                _lastProcTreeUiUtc = DateTime.MinValue;
+                RefreshLiveTelemetryUi(_controller.LastTelemetry);
+                RefreshRecordingUi(_controller.RecordingStatus);
+                _suppressEvents = true;
+                try { RefreshProcessTreeTargetCombo(_controller.LatestProcessTree, _controller.Settings); }
+                finally { _suppressEvents = false; }
+            }
         };
         Closing += ControlWindow_Closing;
         _controller.StateChanged += Controller_StateChanged;
+        _controller.NetworkIpChanged += Controller_NetworkIpChanged;
+        _controller.TelemetryUpdated += Controller_TelemetryUpdated;
+        _controller.ProcessTreeUpdated += Controller_ProcessTreeUpdated;
+        _controller.RecordingStateChanged += Controller_RecordingStateChanged;
     }
 
     private void PopulateFxCurrencyCombos()
@@ -90,60 +154,81 @@ public partial class ControlWindow : Window
         }
     }
 
-    private void ApplyThemeResources(string? theme)
+    // ==================== COLOR SKINS ====================
+
+    private void BuildSkinSwatches()
+    {
+        SkinSwatchGrid.Children.Clear();
+        var normalStyle = (Style)FindResource("SkinChipButton");
+        foreach (var skin in SkinCatalog.All)
+        {
+            var accent = (System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString(skin.AccentHex);
+
+            var dot = new Border
+            {
+                Width = 12,
+                Height = 12,
+                CornerRadius = new CornerRadius(3),
+                Background = new SolidColorBrush(accent),
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            var label = new TextBlock
+            {
+                Text = skin.Name,
+                FontSize = 14,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var row = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(dot, Dock.Left);
+            row.Children.Add(dot);
+            row.Children.Add(label);
+
+            string capturedKey = skin.Key;
+            var chip = new System.Windows.Controls.Button
+            {
+                Tag = capturedKey,
+                Style = normalStyle,
+                ToolTip = skin.Hint,
+                Content = row
+            };
+            chip.Click += (_, _) =>
+            {
+                _controller.UpdateSettings(s => s.Skin = capturedKey);
+                RefreshSkinSwatches(capturedKey);
+            };
+            SkinSwatchGrid.Children.Add(chip);
+        }
+    }
+
+    private void RefreshSkinSwatches(string? activeSkin)
+    {
+        string key = SkinCatalog.Normalize(activeSkin);
+        var normalStyle = (Style)FindResource("SkinChipButton");
+        var activeStyle = (Style)FindResource("ActiveSkinChipButton");
+        foreach (var chip in SkinSwatchGrid.Children.OfType<System.Windows.Controls.Button>())
+        {
+            bool active = string.Equals(chip.Tag?.ToString(), key, StringComparison.OrdinalIgnoreCase);
+            chip.Style = active ? activeStyle : normalStyle;
+        }
+    }
+
+    private void ApplyThemeResources(string? theme, string? skin = null, bool oledTrueBlack = false)
     {
         string norm = SettingsService.NormalizeTheme(theme);
+        string skinKey = SkinCatalog.Normalize(skin);
+        string cacheKey = $"{norm}|{skinKey}|{(oledTrueBlack ? 1 : 0)}";
         bool isDark = norm == "dark";
-        if (_appliedTheme == norm) return;
-        _appliedTheme = norm;
+        if (_appliedTheme == cacheKey) return;
+        _appliedTheme = cacheKey;
 
-        if (isDark)
-        {
-            SetBrush("BgPage", 0x0F, 0x11, 0x15);
-            SetBrush("BgSurface", 0x17, 0x1A, 0x21);
-            SetBrush("BgHover", 0x1F, 0x23, 0x2B);
-            SetBrush("BorderToken", 0x2A, 0x2F, 0x3A);
-            SetBrush("BorderStrong", 0x5E, 0x68, 0x78);
-            SetBrush("TextMuted", 0xA1, 0xA9, 0xB6);
-            SetBrush("TextMain", 0xE6, 0xE8, 0xEC);
-            SetBrush("Accent", 0x3D, 0x6F, 0xE0);
-            SetBrush("AccentHover", 0x33, 0x60, 0xCC);
-            SetBrush("AccentText", 0x7B, 0xA3, 0xF2);
-            SetBrush("AccentSubtle", 0x1B, 0x2A, 0x45);
-            SetBrush("Success", 0x4C, 0xC3, 0x8A);
-            SetBrush("SuccessSubtle", 0x15, 0x29, 0x1F);
-            SetBrush("Danger", 0xF0, 0x70, 0x5F);
-            SetBrush("DangerSubtle", 0x33, 0x19, 0x1A);
-        }
-        else
-        {
-            SetBrush("BgPage", 0xF7, 0xF8, 0xFA);
-            SetBrush("BgSurface", 0xFF, 0xFF, 0xFF);
-            SetBrush("BgHover", 0xF1, 0xF3, 0xF5);
-            SetBrush("BorderToken", 0xE4, 0xE7, 0xEC);
-            SetBrush("BorderStrong", 0x8A, 0x94, 0xA3);
-            SetBrush("TextMuted", 0x5B, 0x64, 0x72);
-            SetBrush("TextMain", 0x1F, 0x29, 0x37);
-            SetBrush("Accent", 0x2B, 0x5F, 0xD9);
-            SetBrush("AccentHover", 0x23, 0x4D, 0xB5);
-            SetBrush("AccentText", 0x2B, 0x5F, 0xD9);
-            SetBrush("AccentSubtle", 0xEA, 0xF1, 0xFB);
-            SetBrush("Success", 0x1F, 0x7A, 0x4A);
-            SetBrush("SuccessSubtle", 0xE7, 0xF4, 0xEC);
-            SetBrush("Danger", 0xB4, 0x23, 0x18);
-            SetBrush("DangerSubtle", 0xFD, 0xEC, 0xEA);
-        }
+        SkinApplier.Apply(Resources, skinKey, norm, oledTrueBlack);
 
         var hwnd = new WindowInteropHelper(this).Handle;
         if (hwnd != IntPtr.Zero)
         {
             Win32Interop.ApplyWindowFrame(hwnd, isDark, rounded: true);
         }
-    }
-
-    private void SetBrush(string key, byte r, byte g, byte b)
-    {
-        Resources[key] = new SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
     }
 
     private void ControlWindow_SourceInitialized(object? sender, EventArgs e)
@@ -214,6 +299,10 @@ public partial class ControlWindow : Window
         StopDonatePolling();
         _allowClose = true;
         _controller.StateChanged -= Controller_StateChanged;
+        _controller.NetworkIpChanged -= Controller_NetworkIpChanged;
+        _controller.TelemetryUpdated -= Controller_TelemetryUpdated;
+        _controller.ProcessTreeUpdated -= Controller_ProcessTreeUpdated;
+        _controller.RecordingStateChanged -= Controller_RecordingStateChanged;
         try
         {
             _hwndSource?.RemoveHook(WndProc);
@@ -228,6 +317,52 @@ public partial class ControlWindow : Window
         RefreshFromController();
     }
 
+    private void Controller_NetworkIpChanged(NetworkIpSnapshot netIp)
+    {
+        UpdateNetworkIpUi(netIp);
+    }
+
+    private void Controller_TelemetryUpdated(TelemetrySnapshot snap)
+    {
+        if (!IsVisible) return;
+        var now = DateTime.UtcNow;
+        if ((now - _lastTelemetryUiUtc).TotalMilliseconds < 950) return;
+        _lastTelemetryUiUtc = now;
+        RefreshLiveTelemetryUi(snap);
+    }
+
+    private void Controller_ProcessTreeUpdated(ProcessTreeSnapshot snap)
+    {
+        if (!IsVisible) return;
+        var now = DateTime.UtcNow;
+        bool activeChanged = snap.ActivePid != _lastProcTreeActivePid;
+        if (!activeChanged && (now - _lastProcTreeUiUtc).TotalMilliseconds < 950) return;
+        _lastProcTreeUiUtc = now;
+        _lastProcTreeActivePid = snap.ActivePid;
+
+        UpdateProcTreeStatusPill(snap, _controller.Settings);
+        if (ComboProcTreeTarget.IsDropDownOpen)
+        {
+            _procTreeRefreshPendingAfterDropDown = true;
+            return;
+        }
+
+        _suppressEvents = true;
+        try
+        {
+            RefreshProcessTreeTargetCombo(snap, _controller.Settings);
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+    }
+
+    private void Controller_RecordingStateChanged(TelemetryRecordingStatus status)
+    {
+        RefreshRecordingUi(status);
+    }
+
     private void BtnNav_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string tab) return;
@@ -236,9 +371,12 @@ public partial class ControlWindow : Window
 
     public void SwitchToTab(string tab)
     {
+        if (!AppFeatures.MarketEnabled && tab == "market") tab = "window";
+        if (!AppFeatures.DonationEnabled && tab == "donate") tab = "window";
         PanelWindow.Visibility = tab == "window" ? Visibility.Visible : Visibility.Collapsed;
         PanelMonitor.Visibility = tab == "monitor" ? Visibility.Visible : Visibility.Collapsed;
         PanelLayout.Visibility = tab == "layout" ? Visibility.Visible : Visibility.Collapsed;
+        PanelPro.Visibility = tab == "pro" ? Visibility.Visible : Visibility.Collapsed;
         PanelMarket.Visibility = tab == "market" ? Visibility.Visible : Visibility.Collapsed;
         PanelDonate.Visibility = tab == "donate" ? Visibility.Visible : Visibility.Collapsed;
 
@@ -254,6 +392,17 @@ public partial class ControlWindow : Window
         {
             Dispatcher.BeginInvoke(RenderLayoutCanvas, System.Windows.Threading.DispatcherPriority.Loaded);
         }
+        else if (tab == "pro")
+        {
+            RefreshLiveTelemetryUi(_controller.LastTelemetry);
+            RefreshRecordingUi(_controller.RecordingStatus);
+        }
+        else if (tab == "monitor")
+        {
+            _suppressEvents = true;
+            try { RefreshProcessTreeTargetCombo(_controller.LatestProcessTree, _controller.Settings); }
+            finally { _suppressEvents = false; }
+        }
     }
 
     public void RefreshFromController()
@@ -262,7 +411,23 @@ public partial class ControlWindow : Window
         try
         {
             var s = _controller.Settings;
-            ApplyThemeResources(s.Theme);
+            ApplyThemeResources(s.Theme, s.Skin, s.OledTrueBlack);
+
+            // Top-level elevation hint banner
+            ElevationBanner.Visibility = (!_controller.IsElevated && !_elevationBannerDismissed)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+
+            // Top bar quick monitor page switcher
+            string activeMonitorPage = SettingsService.NormalizeMonitorPage(s.MonitorPage);
+            var segNormal = (Style)FindResource("SegButton");
+            var segActive = (Style)FindResource("ActiveSegButton");
+            BtnTopPageOverview.Style = activeMonitorPage == "overview" ? segActive : segNormal;
+            BtnTopPageProcTree.Style = activeMonitorPage == "proctree" ? segActive : segNormal;
+
+            BtnToggleFullScreen.Content = _controller.IsDirectDisplayActive
+                ? "退出硬件独占"
+                : "切换整屏 / 固定窗口";
 
             _monitors = _controller.DisplayManager.GetMonitors();
             var targetMon = _controller.CurrentDisplayMonitor
@@ -315,7 +480,7 @@ public partial class ControlWindow : Window
                     : "监控窗口未打开，点击右侧「打开监控窗口」启动";
             }
 
-            // Monitors combo
+            // Monitors combo (dimmed/disabled when Direct Display exclusive is selected)
             ComboMonitors.Items.Clear();
             int selectedMonIdx = 0;
             for (int i = 0; i < _monitors.Count; i++)
@@ -327,6 +492,12 @@ public partial class ControlWindow : Window
             }
             if (ComboMonitors.Items.Count > 0)
                 ComboMonitors.SelectedIndex = selectedMonIdx;
+
+            ComboMonitors.IsEnabled = !s.UseDirectDisplayExclusive;
+            ComboMonitors.Opacity = s.UseDirectDisplayExclusive ? 0.55 : 1.0;
+            ComboMonitors.ToolTip = s.UseDirectDisplayExclusive
+                ? "当前为硬件独占模式，请在右侧选择专用显示目标"
+                : "选择桌面监控窗口所在的目标显示器";
 
             if (targetMon != null)
             {
@@ -345,7 +516,7 @@ public partial class ControlWindow : Window
             FixedWindowPanel.IsEnabled = !s.IsFullScreen && !s.UseDirectDisplayExclusive;
             FixedWindowPanel.Opacity = s.IsFullScreen ? 0.55 : 1.0;
 
-            RefreshDirectDisplayTargetsUi(s);
+            RefreshDirectDisplayTargetsUi(s, forceRefresh: false);
 
             string activePreset = SettingsService.NormalizePositionPreset(s.WindowPositionPreset);
             PresetStatusText.Text = s.IsFullScreen
@@ -364,13 +535,13 @@ public partial class ControlWindow : Window
             int relX = targetMon != null ? effectiveRect.Left - targetMon.WorkLeft : s.WindowOffsetX;
             int relY = targetMon != null ? effectiveRect.Top - targetMon.WorkTop : s.WindowOffsetY;
 
-            TxtPosX.Text = relX.ToString();
-            TxtPosY.Text = relY.ToString();
-            TxtPosW.Text = effectiveRect.Width.ToString();
-            TxtPosH.Text = effectiveRect.Height.ToString();
-            TxtMargin.Text = s.WindowEdgeMargin.ToString();
+            if (!TxtPosX.IsKeyboardFocused) TxtPosX.Text = relX.ToString();
+            if (!TxtPosY.IsKeyboardFocused) TxtPosY.Text = relY.ToString();
+            if (!TxtPosW.IsKeyboardFocused) TxtPosW.Text = effectiveRect.Width.ToString();
+            if (!TxtPosH.IsKeyboardFocused) TxtPosH.Text = effectiveRect.Height.ToString();
+            if (!TxtMargin.IsKeyboardFocused) TxtMargin.Text = s.WindowEdgeMargin.ToString();
 
-            BtnCaptureCurrentPos.IsEnabled = _controller.IsDisplayOpen && !s.IsFullScreen;
+            BtnCaptureCurrentPos.IsEnabled = _controller.IsDisplayOpen && !s.IsFullScreen && !s.UseDirectDisplayExclusive;
 
             ChkLockPosition.IsChecked = s.LockWindowPosition;
             if (s.LockWindowPosition)
@@ -391,24 +562,26 @@ public partial class ControlWindow : Window
             SelectComboByTag(ComboRenderMode, s.RenderMode ?? "safe");
 
             // Appearance & Hardware Monitor
-            SelectComboByTag(ComboLayout, s.LayoutMode ?? "split");
+            SelectComboByTag(ComboLayout, s.LayoutMode ?? "hardware");
             SelectComboByTag(ComboTheme, SettingsService.NormalizeTheme(s.Theme));
-            SelectComboByTag(ComboColors, s.ColorScheme ?? "cn");
-            SelectComboByTag(ComboInterval, s.TelemetryIntervalMs.ToString());
-            SelectComboByTag(ComboCpuView, s.CpuViewMode ?? "cores");
+            SelectComboByTag(ComboHudStyle, SettingsService.NormalizeHudStyle(s.HudStyle));
+            SelectComboByTag(ComboTelemetryInterval, MatchTelemetryIntervalTag(s.TelemetryIntervalMs));
+            if (AppFeatures.MarketEnabled)
+            {
+                SelectComboByTag(ComboColors, s.ColorScheme ?? "cn");
+            }
+            RefreshSkinSwatches(s.Skin);
+            ChkOledTrueBlack.IsChecked = s.OledTrueBlack;
+            ChkMaskPublicIp.IsChecked = s.MaskPublicIp;
+            SelectComboByTag(ComboPerfMode, SettingsService.NormalizePerformanceMode(s.PerformanceMode));
+            SelectComboByTag(ComboCpuView, SettingsService.NormalizeCpuViewMode(s.CpuViewMode));
             SelectComboByTag(ComboProcSort, s.ProcessSortBy ?? "cpu");
             RefreshCpuDisplayTargetCombo(s);
+            RefreshProcessTreeControlsUi(s);
             RefreshLayoutEditorUi(s);
 
             // Network IP readout
-            var netIp = _controller.LastNetworkIp;
-            if (netIp != null)
-            {
-                BtnRefreshIp.IsEnabled = !netIp.IsChecking;
-                BtnRefreshIp.Content = netIp.IsChecking ? "检测中" : "刷新 IP";
-                TxtDomesticIpInfo.Text = FormatIpSummary(netIp.Domestic, netIp.IsChecking);
-                TxtOverseasIpInfo.Text = FormatIpSummary(netIp.Overseas, netIp.IsChecking);
-            }
+            UpdateNetworkIpUi(_controller.LastNetworkIp);
 
             // Startup, Updates & Elevation
             ChkAutoStart.IsChecked = _controller.IsAutoStartEnabled;
@@ -431,47 +604,67 @@ public partial class ControlWindow : Window
                 BtnElevate.Visibility = Visibility.Visible;
             }
 
-            // Market, K-Line, Exchange & Active Symbol
-            SelectComboByTag(ComboCategory, s.ActiveCategory ?? "crypto");
-            SelectComboByTag(ComboKlineInterval, s.ActiveInterval ?? "15m");
-            SelectComboByTag(ComboCryptoExchange, s.CryptoExchange ?? "binance");
-            SelectComboByTag(ComboCryptoType, s.CryptoMarketType ?? "futures");
+            // Tab 4: Alerts, Ping Target, Diagnostics & Recording
+            var alerts = s.Alerts ?? new AlertSettings();
+            ChkAlertsEnabled.IsChecked = alerts.Enabled;
+            ChkAlertTrayNotify.IsChecked = alerts.TrayNotifyEnabled;
+            if (!TxtAlertCpuWarn.IsKeyboardFocused) TxtAlertCpuWarn.Text = alerts.CpuTempWarnC.ToString();
+            if (!TxtAlertCpuCrit.IsKeyboardFocused) TxtAlertCpuCrit.Text = alerts.CpuTempCritC.ToString();
+            if (!TxtAlertGpuWarn.IsKeyboardFocused) TxtAlertGpuWarn.Text = alerts.GpuTempWarnC.ToString();
+            if (!TxtAlertGpuCrit.IsKeyboardFocused) TxtAlertGpuCrit.Text = alerts.GpuTempCritC.ToString();
+            if (!TxtAlertRamWarn.IsKeyboardFocused) TxtAlertRamWarn.Text = alerts.RamUsageWarnPct.ToString();
+            if (!TxtAlertDiskWarn.IsKeyboardFocused) TxtAlertDiskWarn.Text = alerts.DiskUsageWarnPct.ToString();
+            if (!TxtAlertCooldown.IsKeyboardFocused) TxtAlertCooldown.Text = alerts.CooldownSeconds.ToString();
+            if (!TxtPingTarget.IsKeyboardFocused) TxtPingTarget.Text = SettingsService.NormalizePingTarget(s.PingTargetHost);
+            RefreshRecordingUi(_controller.RecordingStatus);
+            RefreshLiveTelemetryUi(_controller.LastTelemetry);
 
-            var allSymbols = _controller.GetAllSymbols();
-            ComboActiveSymbol.Items.Clear();
-            int activeSymIdx = 0;
-            for (int i = 0; i < allSymbols.Count; i++)
+            // Market, K-Line, Exchange & Active Symbol (skip entirely when feature-gated off)
+            if (AppFeatures.MarketEnabled)
             {
-                var sym = allSymbols[i];
-                ComboActiveSymbol.Items.Add(new ComboBoxItem
+                SelectComboByTag(ComboCategory, s.ActiveCategory ?? "crypto");
+                SelectComboByTag(ComboKlineInterval, s.ActiveInterval ?? "15m");
+                SelectComboByTag(ComboCryptoExchange, s.CryptoExchange ?? "binance");
+                SelectComboByTag(ComboCryptoType, s.CryptoMarketType ?? "futures");
+
+                var allSymbols = _controller.GetAllSymbols();
+                ComboActiveSymbol.Items.Clear();
+                int activeSymIdx = 0;
+                for (int i = 0; i < allSymbols.Count; i++)
                 {
-                    Content = $"{sym.DisplayCode} · {sym.Name}",
-                    Tag = sym.Id
-                });
-                if (string.Equals(sym.Id, s.ActiveSymbolId, StringComparison.OrdinalIgnoreCase))
-                    activeSymIdx = i;
+                    var sym = allSymbols[i];
+                    ComboActiveSymbol.Items.Add(new ComboBoxItem
+                    {
+                        Content = $"{sym.DisplayCode} · {sym.Name}",
+                        Tag = sym.Id
+                    });
+                    if (string.Equals(sym.Id, s.ActiveSymbolId, StringComparison.OrdinalIgnoreCase))
+                        activeSymIdx = i;
+                }
+                if (ComboActiveSymbol.Items.Count > 0)
+                    ComboActiveSymbol.SelectedIndex = activeSymIdx;
+
+                ChkShowMA.IsChecked = s.ShowMA;
+                ChkShowBoll.IsChecked = s.ShowBoll;
+                ChkShowVol.IsChecked = s.ShowVolume;
+
+                // FX Converter settings
+                if (!TxtFxAmount.IsKeyboardFocused)
+                    TxtFxAmount.Text = s.FxAmount.ToString("G");
+                SelectComboByTag(ComboFxFrom, s.FxFromCurrency ?? "USD");
+                SelectComboByTag(ComboFxTo, s.FxToCurrency ?? "CNY");
+
+                // Custom symbols list
+                CustomSymbolsList.ItemsSource = null;
+                CustomSymbolsList.ItemsSource = s.CustomSymbols.ToList();
+                NoCustomHint.Visibility = s.CustomSymbols.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             }
-            if (ComboActiveSymbol.Items.Count > 0)
-                ComboActiveSymbol.SelectedIndex = activeSymIdx;
 
-            ChkShowMA.IsChecked = s.ShowMA;
-            ChkShowBoll.IsChecked = s.ShowBoll;
-            ChkShowVol.IsChecked = s.ShowVolume;
-
-            // FX Converter settings
-            if (!TxtFxAmount.IsKeyboardFocused)
-                TxtFxAmount.Text = s.FxAmount.ToString("G");
-            SelectComboByTag(ComboFxFrom, s.FxFromCurrency ?? "USD");
-            SelectComboByTag(ComboFxTo, s.FxToCurrency ?? "CNY");
-
-            // Custom symbols list
-            CustomSymbolsList.ItemsSource = null;
-            CustomSymbolsList.ItemsSource = s.CustomSymbols.ToList();
-            NoCustomHint.Visibility = s.CustomSymbols.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
-            // Donation API endpoint
-            if (!TxtDonateApiUrl.IsKeyboardFocused)
+            // Donation API endpoint (skip when feature-gated off)
+            if (AppFeatures.DonationEnabled && !TxtDonateApiUrl.IsKeyboardFocused)
+            {
                 TxtDonateApiUrl.Text = DonationService.NormalizeBaseUrl(s.DonationApiBaseUrl);
+            }
         }
         finally
         {
@@ -479,13 +672,57 @@ public partial class ControlWindow : Window
         }
     }
 
-    private static string FormatIpSummary(IpEndpointInfo? ep, bool isChecking)
+    private void UpdateNetworkIpUi(NetworkIpSnapshot? netIp)
+    {
+        if (netIp == null) return;
+        bool maskIp = _controller.Settings.MaskPublicIp;
+        BtnRefreshIp.IsEnabled = !netIp.IsChecking;
+        BtnRefreshIp.Content = netIp.IsChecking ? "检测中" : "刷新 IP";
+        TxtDomesticIpInfo.Text = FormatIpSummary(netIp.Domestic, netIp.IsChecking, maskIp);
+        TxtOverseasIpInfo.Text = FormatIpSummary(netIp.Overseas, netIp.IsChecking, maskIp);
+        TxtDomesticIpInfo.ToolTip = FormatIpTooltip(netIp.Domestic, maskIp);
+        TxtOverseasIpInfo.ToolTip = FormatIpTooltip(netIp.Overseas, maskIp);
+    }
+
+    private static string FormatIpSummary(IpEndpointInfo? ep, bool isChecking, bool maskIp)
     {
         if (ep != null && ep.Ok && !string.IsNullOrWhiteSpace(ep.Ip))
         {
-            return string.IsNullOrWhiteSpace(ep.Location) ? ep.Ip : $"{ep.Ip}（{ep.Location}）";
+            string displayIp = maskIp ? SettingsService.MaskIpAddress(ep.Ip) : ep.Ip;
+            string loc = string.IsNullOrWhiteSpace(ep.Location) ? "" : $"（{ep.Location}）";
+            var riskParts = new List<string>(2);
+            if (ep.PurityScore.HasValue) riskParts.Add($"纯净{ep.PurityScore.Value}");
+            if (!string.IsNullOrWhiteSpace(ep.IpType)) riskParts.Add(ep.IpType);
+            else if (!string.IsNullOrWhiteSpace(ep.RiskLabel)) riskParts.Add(ep.RiskLabel);
+            string riskSuffix = riskParts.Count > 0 ? $" · {string.Join("·", riskParts)}" : "";
+            return $"{displayIp}{loc}{riskSuffix}";
         }
         return isChecking ? "检测中" : "未连通";
+    }
+
+    private static string? FormatIpTooltip(IpEndpointInfo? ep, bool maskIp)
+    {
+        if (ep == null || !ep.Ok || string.IsNullOrWhiteSpace(ep.Ip)) return null;
+        var lines = new List<string>
+        {
+            $"IP：{(maskIp ? SettingsService.MaskIpAddress(ep.Ip) : ep.Ip)}"
+        };
+        if (!string.IsNullOrWhiteSpace(ep.Location)) lines.Add($"归属地：{ep.Location}");
+        if (ep.PurityScore.HasValue && ep.FraudScore.HasValue)
+            lines.Add($"纯净分：{ep.PurityScore.Value} / 欺诈分：{ep.FraudScore.Value}（{ep.RiskLabel}）");
+        if (!string.IsNullOrWhiteSpace(ep.IpType)) lines.Add($"网络类型：{ep.IpType}");
+        if (!string.IsNullOrWhiteSpace(ep.Asn) || !string.IsNullOrWhiteSpace(ep.Isp))
+            lines.Add($"自治域：{string.Join(" · ", new[] { ep.Asn, ep.Isp }.Where(x => !string.IsNullOrWhiteSpace(x)))}");
+        if (!string.IsNullOrWhiteSpace(ep.RiskSource)) lines.Add($"风控来源：{ep.RiskSource}");
+        return string.Join("\n", lines);
+    }
+
+    private static string MatchTelemetryIntervalTag(int intervalMs)
+    {
+        if (intervalMs <= 750) return "500";
+        if (intervalMs <= 1250) return "1000";
+        if (intervalMs <= 2250) return "1500";
+        return "3000";
     }
 
     private void UpdateAddSymbolPlaceholders()
@@ -548,11 +785,20 @@ public partial class ControlWindow : Window
     private void BtnOpenOrRecreate_Click(object sender, RoutedEventArgs e) => _ = _controller.RecreateDisplayWindowAsync();
     private void BtnCloseDisplay_Click(object sender, RoutedEventArgs e) => _controller.CloseDisplayWindow();
     private void BtnToggleFullScreen_Click(object sender, RoutedEventArgs e) => _controller.ToggleFullScreen();
-    private void BtnRefreshMonitors_Click(object sender, RoutedEventArgs e) => RefreshFromController();
+    private void BtnRefreshMonitors_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.GetCachedDirectDisplayTargets(forceRefresh: true);
+        RefreshFromController();
+    }
     private void BtnRefreshIp_Click(object sender, RoutedEventArgs e) => _controller.RefreshNetworkIpNow();
     private void BtnRefreshMarket_Click(object sender, RoutedEventArgs e) => _controller.RefreshMarketNow();
     private void BtnCaptureCurrentPos_Click(object sender, RoutedEventArgs e) => _controller.CaptureCurrentDisplayGeometry();
     private void BtnElevate_Click(object sender, RoutedEventArgs e) => _controller.RestartAsAdministrator();
+    private void BtnDismissElevationBanner_Click(object sender, RoutedEventArgs e)
+    {
+        _elevationBannerDismissed = true;
+        ElevationBanner.Visibility = Visibility.Collapsed;
+    }
     private void BtnHideToTray_Click(object sender, RoutedEventArgs e)
     {
         Hide();
@@ -584,9 +830,9 @@ public partial class ControlWindow : Window
         }
     }
 
-    private void RefreshDirectDisplayTargetsUi(AppSettings s)
+    private void RefreshDirectDisplayTargetsUi(AppSettings s, bool forceRefresh = false)
     {
-        var targets = DirectDisplayService.EnumerateTargets();
+        var targets = _controller.GetCachedDirectDisplayTargets(forceRefresh);
         ComboDirectTargets.Items.Clear();
         int selectedIdx = 0;
 
@@ -606,6 +852,7 @@ public partial class ControlWindow : Window
             ComboDirectTargets.SelectedIndex = selectedIdx;
 
         SelectComboByTag(ComboDirectFps, s.DirectDisplayFps.ToString());
+        SelectComboByTag(ComboDirectRotation, DirectDisplaySession.NormalizeRotation(s.DirectDisplayRotation).ToString());
 
         int specializedCount = targets.Count(t => t.IsSpecialized);
         if (_controller.IsDirectDisplayActive && _controller.ActiveDirectDisplayTarget != null)
@@ -658,6 +905,13 @@ public partial class ControlWindow : Window
         if (_suppressEvents) return;
         if (int.TryParse(GetSelectedTag(ComboDirectFps, "10"), out int fps))
             _controller.SetDirectDisplayFps(fps);
+    }
+
+    private void ComboDirectRotation_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        if (int.TryParse(GetSelectedTag(ComboDirectRotation, "0"), out int deg))
+            _controller.SetDirectDisplayRotation(deg);
     }
 
     private void BtnOpenWinDisplaySettings_Click(object sender, RoutedEventArgs e) =>
@@ -790,22 +1044,35 @@ public partial class ControlWindow : Window
     private void ComboVisual_Changed(object sender, SelectionChangedEventArgs e)
     {
         if (_suppressEvents) return;
-        string layout = GetSelectedTag(ComboLayout, "split");
+        string layout = GetSelectedTag(ComboLayout, "hardware");
         string theme = GetSelectedTag(ComboTheme, "light");
-        string colors = GetSelectedTag(ComboColors, "cn");
-        int interval = int.TryParse(GetSelectedTag(ComboInterval, "1000"), out int ms) ? ms : 1000;
-        string cpuView = GetSelectedTag(ComboCpuView, "cores");
+        string hudStyle = GetSelectedTag(ComboHudStyle, "instrument");
+        int intervalMs = int.TryParse(GetSelectedTag(ComboTelemetryInterval, "1500"), out int parsedInterval)
+            ? parsedInterval
+            : _controller.Settings.TelemetryIntervalMs;
+        string colors = AppFeatures.MarketEnabled
+            ? GetSelectedTag(ComboColors, "cn")
+            : (_controller.Settings.ColorScheme ?? "cn");
+        string cpuView = GetSelectedTag(ComboCpuView, "compact");
         string procSort = GetSelectedTag(ComboProcSort, "cpu");
 
         _controller.UpdateSettings(s =>
         {
             s.LayoutMode = layout;
             s.Theme = theme;
+            s.HudStyle = hudStyle;
+            s.TelemetryIntervalMs = intervalMs;
             s.ColorScheme = colors;
-            s.TelemetryIntervalMs = interval;
             s.CpuViewMode = cpuView;
             s.ProcessSortBy = procSort;
         });
+    }
+
+    private void ComboPerfMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        string mode = GetSelectedTag(ComboPerfMode, "balanced");
+        _controller.SetPerformanceMode(mode);
     }
 
     private void RefreshCpuDisplayTargetCombo(AppSettings s)
@@ -880,8 +1147,12 @@ public partial class ControlWindow : Window
         SelectComboByTag(ComboGridRows, layout.Rows.ToString());
         SelectComboByTag(ComboGridGap, layout.GapPx.ToString());
 
-        var selected = layout.Widgets.FirstOrDefault(w => string.Equals(w.Id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase))
-                       ?? layout.Widgets.FirstOrDefault();
+        var allowedWidgets = layout.Widgets
+            .Where(w => AppFeatures.MarketEnabled || !CustomLayoutConfig.IsMarketWidget(w.Id))
+            .ToList();
+
+        var selected = allowedWidgets.FirstOrDefault(w => string.Equals(w.Id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase))
+                       ?? allowedWidgets.FirstOrDefault();
         if (selected != null)
         {
             _selectedWidgetId = selected.Id;
@@ -893,10 +1164,11 @@ public partial class ControlWindow : Window
             TxtWidgetRowSpan.Text = selected.RowSpan.ToString();
         }
 
-        // Rebuild compact 3x3 module toggle chips
+        // Rebuild compact 3-column module toggle chips
         LayoutModulesGrid.Children.Clear();
         foreach (var (id, _, shortTitle) in CustomLayoutConfig.AllWidgets)
         {
+            if (!AppFeatures.MarketEnabled && CustomLayoutConfig.IsMarketWidget(id)) continue;
             var widget = layout.Widgets.FirstOrDefault(w => string.Equals(w.Id, id, StringComparison.OrdinalIgnoreCase));
             bool isVisible = widget?.Visible ?? true;
             bool isSelected = string.Equals(id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase);
@@ -953,14 +1225,29 @@ public partial class ControlWindow : Window
         RenderLayoutCanvas();
     }
 
+    private double GetEffectiveLayoutCanvasHeight()
+    {
+        if (!double.IsNaN(LayoutEditorCanvas.Height) && LayoutEditorCanvas.Height > 40)
+            return LayoutEditorCanvas.Height;
+        return LayoutEditorCanvas.ActualHeight > 40 ? LayoutEditorCanvas.ActualHeight : 252;
+    }
+
     private void RenderLayoutCanvas()
     {
         if (LayoutEditorCanvas == null) return;
         LayoutEditorCanvas.Children.Clear();
 
-        double canvasW = LayoutEditorCanvas.ActualWidth > 40 ? LayoutEditorCanvas.ActualWidth : 460;
-        double canvasH = LayoutEditorCanvas.ActualHeight > 40 ? LayoutEditorCanvas.ActualHeight : 296;
         var layout = SettingsService.NormalizeCustomLayout(_controller.Settings.CustomLayout);
+        double desiredHeight = layout.Rows > layout.Columns
+            ? 320
+            : (layout.Columns >= layout.Rows * 2 ? 180 : 252);
+        if (Math.Abs(LayoutEditorCanvas.Height - desiredHeight) > 0.5)
+        {
+            LayoutEditorCanvas.Height = desiredHeight;
+        }
+
+        double canvasW = LayoutEditorCanvas.ActualWidth > 40 ? LayoutEditorCanvas.ActualWidth : 460;
+        double canvasH = GetEffectiveLayoutCanvasHeight();
 
         int cols = layout.Columns;
         int rows = layout.Rows;
@@ -988,12 +1275,16 @@ public partial class ControlWindow : Window
             }
         }
 
-        // 2. Visible widget tiles
-        var visibleWidgets = layout.Widgets.Where(w => w.Visible).ToList();
+        // 2. Visible widget tiles (always excluding gated market widgets when MarketEnabled == false)
+        var visibleWidgets = layout.Widgets
+            .Where(w => w.Visible && (AppFeatures.MarketEnabled || !CustomLayoutConfig.IsMarketWidget(w.Id)))
+            .ToList();
+        bool anyOverlap = false;
         foreach (var w in visibleWidgets)
         {
             bool isSelected = string.Equals(w.Id, _selectedWidgetId, StringComparison.OrdinalIgnoreCase);
             bool overlaps = HasWidgetOverlap(visibleWidgets, w);
+            if (overlaps) anyOverlap = true;
 
             double x = (w.Col - 1) * cellW + 2;
             double y = (w.Row - 1) * cellH + 2;
@@ -1095,6 +1386,8 @@ public partial class ControlWindow : Window
             System.Windows.Controls.Panel.SetZIndex(tile, isSelected ? 10 : 1);
             LayoutEditorCanvas.Children.Add(tile);
         }
+
+        LayoutOverlapBanner.Visibility = anyOverlap ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void StartWidgetDrag(string widgetId, bool isResize, System.Windows.Point startPt)
@@ -1136,7 +1429,7 @@ public partial class ControlWindow : Window
         if (w == null) return;
 
         double canvasW = LayoutEditorCanvas.ActualWidth > 40 ? LayoutEditorCanvas.ActualWidth : 460;
-        double canvasH = LayoutEditorCanvas.ActualHeight > 40 ? LayoutEditorCanvas.ActualHeight : 296;
+        double canvasH = GetEffectiveLayoutCanvasHeight();
         double cellW = canvasW / layout.Columns;
         double cellH = canvasH / layout.Rows;
 
@@ -1221,7 +1514,9 @@ public partial class ControlWindow : Window
 
         if (visible)
         {
-            var others = layout.Widgets.Where(x => x.Visible && !ReferenceEquals(x, w)).ToList();
+            var others = layout.Widgets
+                .Where(x => x.Visible && !ReferenceEquals(x, w) && (AppFeatures.MarketEnabled || !CustomLayoutConfig.IsMarketWidget(x.Id)))
+                .ToList();
             if (HasWidgetOverlap(others.Append(w).ToList(), w))
             {
                 TryFindFreeSlot(layout, others, w);
@@ -1256,7 +1551,7 @@ public partial class ControlWindow : Window
     {
         var layout = _controller.Settings.CustomLayout.Clone();
         var visible = layout.Widgets
-            .Where(w => w.Visible)
+            .Where(w => w.Visible && (AppFeatures.MarketEnabled || !CustomLayoutConfig.IsMarketWidget(w.Id)))
             .OrderBy(w => w.Row)
             .ThenBy(w => w.Col)
             .ToList();
@@ -1294,7 +1589,7 @@ public partial class ControlWindow : Window
 
     private void BtnLayoutReset_Click(object sender, RoutedEventArgs e)
     {
-        _controller.UpdateCustomLayout(CustomLayoutConfig.CreatePreset("split"), activateCustomMode: true);
+        _controller.UpdateCustomLayout(CustomLayoutConfig.CreatePreset(CustomLayoutConfig.DefaultPreset), activateCustomMode: true);
     }
 
     private void BtnActivateCustomLayout_Click(object sender, RoutedEventArgs e)
@@ -1353,15 +1648,608 @@ public partial class ControlWindow : Window
         _controller.UpdateSettings(s =>
         {
             s.HideMonitorTopBar = ChkHideTopBar.IsChecked == true;
-            s.ShowMA = ChkShowMA.IsChecked == true;
-            s.ShowBoll = ChkShowBoll.IsChecked == true;
-            s.ShowVolume = ChkShowVol.IsChecked == true;
+            s.OledTrueBlack = ChkOledTrueBlack.IsChecked == true;
+            s.MaskPublicIp = ChkMaskPublicIp.IsChecked == true;
+            if (AppFeatures.MarketEnabled)
+            {
+                s.ShowMA = ChkShowMA.IsChecked == true;
+                s.ShowBoll = ChkShowBoll.IsChecked == true;
+                s.ShowVolume = ChkShowVol.IsChecked == true;
+            }
             s.AutoOpenDisplayOnStartup = ChkAutoOpenDisplay.IsChecked == true;
             s.ShowControlOnStartup = ChkShowControl.IsChecked == true;
             s.MinimizeToTray = ChkMinTray.IsChecked == true;
             s.OledPixelShift = ChkOled.IsChecked == true;
             s.AutoCheckUpdates = ChkAutoCheckUpdates.IsChecked == true;
         });
+    }
+
+    // ==================== PAGE SWITCHER & PROCESS TREE REMOTE CONTROLS ====================
+
+    private void RefreshProcessTreeControlsUi(AppSettings s)
+    {
+        string page = SettingsService.NormalizeMonitorPage(s.MonitorPage);
+        SelectComboByTag(ComboMonitorPage, page);
+        SelectComboByTag(ComboProcTreeViewMode, SettingsService.NormalizeProcessTreeViewMode(s.ProcessTreeViewMode));
+        SelectComboByTag(ComboProcTreeSortBy, SettingsService.NormalizeProcessTreeSortBy(s.ProcessTreeSortBy));
+        ChkProcTreeAutoFollow.IsChecked = s.ProcessTreeAutoFollowTop;
+        if (!TxtProcTreeFilter.IsKeyboardFocused)
+        {
+            TxtProcTreeFilter.Text = s.ProcessTreeFilter ?? "";
+        }
+
+        var latest = _controller.LatestProcessTree;
+        UpdateProcTreeStatusPill(latest, s);
+        if (!ComboProcTreeTarget.IsDropDownOpen)
+        {
+            RefreshProcessTreeTargetCombo(latest, s);
+        }
+        else
+        {
+            _procTreeRefreshPendingAfterDropDown = true;
+        }
+    }
+
+    private void UpdateProcTreeStatusPill(ProcessTreeSnapshot? snap, AppSettings s)
+    {
+        string page = SettingsService.NormalizeMonitorPage(s.MonitorPage);
+        if (page == "proctree")
+        {
+            ProcTreeStatusBadge.SetResourceReference(Border.BackgroundProperty, "AccentSubtle");
+            TxtProcTreeStatusText.SetResourceReference(TextBlock.ForegroundProperty, "AccentText");
+            TxtProcTreeStatusText.Text = snap != null
+                ? $"进程树 · {snap.TotalProcesses} 进程"
+                : "进程树 · 采集中";
+        }
+        else
+        {
+            ProcTreeStatusBadge.SetResourceReference(Border.BackgroundProperty, "BorderToken");
+            TxtProcTreeStatusText.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            TxtProcTreeStatusText.Text = "硬件总览";
+        }
+    }
+
+    private void RefreshProcessTreeTargetCombo(ProcessTreeSnapshot? snap, AppSettings s)
+    {
+        ComboProcTreeTarget.Items.Clear();
+
+        string autoLabel = s.ProcessTreeAutoFollowTop && snap?.SelectedProcess != null
+            ? $"自动追踪最高负载（当前：{snap.SelectedProcess.Name} · PID {snap.SelectedProcess.Pid}）"
+            : "自动追踪最高负载进程";
+        ComboProcTreeTarget.Items.Add(new ComboBoxItem { Tag = "0", Content = autoLabel });
+
+        int selectedIdx = 0;
+        bool isProcTreePage = string.Equals(SettingsService.NormalizeMonitorPage(s.MonitorPage), "proctree", StringComparison.OrdinalIgnoreCase);
+
+        if (snap != null && snap.Processes.Count > 0)
+        {
+            var topItems = snap.Processes
+                .Where(p => !string.Equals(p.Lifecycle, "exited", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(p => p.CpuPercent)
+                .ThenByDescending(p => p.WorkingSetMb)
+                .Take(40)
+                .ToList();
+
+            if (!s.ProcessTreeAutoFollowTop && s.ProcessTreePinnedPid > 0 && !topItems.Any(p => p.Pid == s.ProcessTreePinnedPid))
+            {
+                var pinnedNode = snap.Processes.FirstOrDefault(p =>
+                    p.Pid == s.ProcessTreePinnedPid &&
+                    !string.Equals(p.Lifecycle, "exited", StringComparison.OrdinalIgnoreCase));
+                if (pinnedNode != null)
+                {
+                    topItems.Insert(0, pinnedNode);
+                }
+            }
+
+            foreach (var p in topItems)
+            {
+                string label = $"{p.Name} (PID {p.Pid}) · CPU {p.CpuPercent:0.0}% · {p.WorkingSetMb:0} MB";
+                ComboProcTreeTarget.Items.Add(new ComboBoxItem { Tag = p.Pid.ToString(), Content = label });
+                if (!s.ProcessTreeAutoFollowTop && s.ProcessTreePinnedPid == p.Pid)
+                {
+                    selectedIdx = ComboProcTreeTarget.Items.Count - 1;
+                }
+            }
+
+            if (!s.ProcessTreeAutoFollowTop && s.ProcessTreePinnedPid > 0 && selectedIdx == 0)
+            {
+                if (snap.PinnedTargetActive && snap.SelectedProcess != null && snap.SelectedProcess.Pid == s.ProcessTreePinnedPid)
+                {
+                    string fallbackName = $"{snap.SelectedProcess.Name} (PID {s.ProcessTreePinnedPid})";
+                    ComboProcTreeTarget.Items.Add(new ComboBoxItem { Tag = s.ProcessTreePinnedPid.ToString(), Content = $"已锁定：{fallbackName}" });
+                }
+                else
+                {
+                    string activeFallback = snap.SelectedProcess != null
+                        ? $"（已回退：{snap.SelectedProcess.Name} · PID {snap.SelectedProcess.Pid}）"
+                        : "（已回退 Top CPU）";
+                    ComboProcTreeTarget.Items.Add(new ComboBoxItem
+                    {
+                        Tag = s.ProcessTreePinnedPid.ToString(),
+                        Content = $"原锁定已退出：PID {s.ProcessTreePinnedPid}{activeFallback}"
+                    });
+                }
+                selectedIdx = ComboProcTreeTarget.Items.Count - 1;
+            }
+        }
+        else if (!isProcTreePage)
+        {
+            ComboProcTreeTarget.Items.Add(new ComboBoxItem
+            {
+                Tag = "-1",
+                Content = "切换到「进程与线程树」页面后将自动加载实时进程列表",
+                IsEnabled = false
+            });
+        }
+
+        ComboProcTreeTarget.SelectedIndex = selectedIdx;
+    }
+
+    private void BtnMonitorPage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string page) return;
+        _controller.SetMonitorPage(page);
+    }
+
+    private void ComboMonitorPage_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        _controller.SetMonitorPage(GetSelectedTag(ComboMonitorPage, "overview"));
+    }
+
+    private void ComboProcTreeOption_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        _controller.SetProcessTreeOptions(
+            viewMode: GetSelectedTag(ComboProcTreeViewMode, "tree"),
+            sortBy: GetSelectedTag(ComboProcTreeSortBy, "cpu"));
+    }
+
+    private void ChkProcTreeAutoFollow_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        bool follow = ChkProcTreeAutoFollow.IsChecked == true;
+        if (follow)
+        {
+            _controller.SetProcessTreeOptions(autoFollowTop: true, pinnedPid: 0);
+        }
+        else
+        {
+            int activePid = _controller.LatestProcessTree?.ActivePid ?? 0;
+            _controller.SetProcessTreeOptions(autoFollowTop: false, pinnedPid: activePid > 0 ? activePid : null);
+        }
+    }
+
+    private void ComboProcTreeTarget_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        if (!int.TryParse(GetSelectedTag(ComboProcTreeTarget, "0"), out int pid) || pid < 0) return;
+        if (pid == 0)
+        {
+            _controller.SetProcessTreeOptions(autoFollowTop: true, pinnedPid: 0);
+        }
+        else
+        {
+            _controller.SetProcessTreeOptions(pinnedPid: pid);
+        }
+    }
+
+    private void ComboProcTreeTarget_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (!_procTreeRefreshPendingAfterDropDown) return;
+        _procTreeRefreshPendingAfterDropDown = false;
+        _suppressEvents = true;
+        try
+        {
+            RefreshProcessTreeTargetCombo(_controller.LatestProcessTree, _controller.Settings);
+        }
+        finally
+        {
+            _suppressEvents = false;
+        }
+    }
+
+    private void ProcTreeFilter_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            _controller.SetProcessTreeOptions(filter: TxtProcTreeFilter.Text);
+            e.Handled = true;
+        }
+    }
+
+    private void BtnApplyProcTreeFilter_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.SetProcessTreeOptions(filter: TxtProcTreeFilter.Text);
+    }
+
+    private void BtnClearProcTreeFilter_Click(object sender, RoutedEventArgs e)
+    {
+        TxtProcTreeFilter.Text = "";
+        _controller.SetProcessTreeOptions(filter: "");
+    }
+
+    // ==================== TAB 4: ALERTS, PING, DIAGNOSTICS, RECORDING & PROFILES ====================
+
+    private void RefreshLiveTelemetryUi(TelemetrySnapshot? snap)
+    {
+        // 1. Network Latency (Tab 2 & Tab 4)
+        var lat = snap?.Network?.Latency;
+        string pingTarget = SettingsService.NormalizePingTarget(_controller.Settings.PingTargetHost);
+        if (lat != null && lat.Ok && lat.PingMs.HasValue)
+        {
+            string jitter = lat.JitterMs.HasValue ? $" · 抖动 {lat.JitterMs.Value:0.0} ms" : "";
+            string loss = lat.PacketLossPercent > 0.05 ? $" · 丢包 {lat.PacketLossPercent:0.#}%" : "";
+            string readout = $"{lat.PingMs.Value:0.#} ms{jitter}{loss}（{lat.Target}）";
+            TxtNetworkPingInfo.Text = readout;
+            TxtProPingReadout.Text = $"延迟：{readout}";
+            TxtProPingReadout.SetResourceReference(TextBlock.ForegroundProperty,
+                lat.PingMs.Value >= 120 || lat.PacketLossPercent >= 5 ? "Warning" : "Success");
+        }
+        else if (lat != null && !string.IsNullOrWhiteSpace(lat.Target))
+        {
+            string failText = $"超时 / 丢包 {lat.PacketLossPercent:0.#}%（{lat.Target}）";
+            TxtNetworkPingInfo.Text = failText;
+            TxtProPingReadout.Text = $"探测异常：{failText}";
+            TxtProPingReadout.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+        }
+        else
+        {
+            TxtNetworkPingInfo.Text = $"探测中（{pingTarget}）";
+            TxtProPingReadout.Text = $"正在向 {pingTarget} 发起 ICMP Ping 探测...";
+            TxtProPingReadout.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+        }
+
+        // 2. Direct Display Live Diagnostics (Tab 1 & Tab 4)
+        var diag = _controller.DirectDisplayDiagnostics;
+        if (diag.IsActive)
+        {
+            string rotSuffix = diag.Rotation != 0 ? $" · {diag.Rotation}°" : "";
+            string diagLine = $"{diag.ActualFps:0.0}/{diag.TargetFps} FPS · 上传 {diag.AvgUploadMs:0.0} ms · 跳过 {diag.SkippedFrames} 帧";
+            if (diag.FailedFrames > 0) diagLine += $" · 失败 {diag.FailedFrames}";
+            if (diag.PanelWidth > 0 && diag.PanelHeight > 0)
+            {
+                diagLine += $" · {diag.PanelWidth}×{diag.PanelHeight}{rotSuffix}";
+            }
+            DirectDiagBox.Visibility = Visibility.Visible;
+            TxtDirectDiagStats.Text = $"直出遥测：{diagLine}";
+            TxtDiagDirectInfo.Text = diagLine;
+            TxtDiagDirectInfo.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+        }
+        else
+        {
+            DirectDiagBox.Visibility = Visibility.Collapsed;
+            TxtDirectDiagStats.Text = "—";
+            TxtDiagDirectInfo.Text = _controller.Settings.UseDirectDisplayExclusive ? "未激活（等待独占连接）" : "未启用（桌面窗口模式）";
+            TxtDiagDirectInfo.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+        }
+
+        // 3. Self Footprint, Sensor Mode & Session Peaks (Tab 4)
+        if (snap != null)
+        {
+            var fp = snap.SelfFootprint;
+            TxtDiagSelfFootprint.Text =
+                $"总 CPU {fp.TotalCpuPercent:0.0}%（主进程 {fp.HostCpuPercent:0.0}% + WebView {fp.WebViewCpuPercent:0.0}%）· 内存 {fp.TotalMemoryMb:0} MB";
+
+            string permMode = _controller.IsElevated ? "管理员完整模式" : "标准权限受限模式";
+            string perfLabel = SettingsService.NormalizePerformanceMode(_controller.Settings.PerformanceMode) switch
+            {
+                "eco" => "节能",
+                "realtime" => "实时",
+                _ => "均衡"
+            };
+            TxtDiagSensorMode.Text = $"{permMode} · {perfLabel}模式 · 单次采集 {fp.CollectDurationMs:0.0} ms";
+
+            var st = snap.SessionStats;
+            var peakParts = new List<string> { $"已采样 {st.SampleCount} 次" };
+            if (st.CpuTemp.Max.HasValue) peakParts.Add($"CPU 峰 {st.CpuTemp.Max.Value:0.#}°C");
+            else if (st.CpuUsage.Max.HasValue) peakParts.Add($"CPU 峰 {st.CpuUsage.Max.Value:0.#}%");
+            if (st.GpuTemp.Max.HasValue) peakParts.Add($"GPU 峰 {st.GpuTemp.Max.Value:0.#}°C");
+            else if (st.GpuUsage.Max.HasValue) peakParts.Add($"GPU 峰 {st.GpuUsage.Max.Value:0.#}%");
+            if (st.RamUsage.Max.HasValue) peakParts.Add($"内存峰 {st.RamUsage.Max.Value:0.#}%");
+            TxtDiagSessionInfo.Text = string.Join(" · ", peakParts);
+
+            // 4. Active Alerts Badge & Detail
+            var activeAlerts = snap.Alerts ?? new List<TelemetryAlertItem>();
+            if (!_controller.Settings.Alerts.Enabled)
+            {
+                ProAlertStatusBadge.SetResourceReference(Border.BackgroundProperty, "BorderToken");
+                TxtProAlertStatusText.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+                TxtProAlertStatusText.Text = "告警已关闭";
+                TxtActiveAlertsDetail.Text = "智能温控与负载告警已暂停，勾选上方开关即可启用。";
+                TxtActiveAlertsDetail.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            }
+            else if (activeAlerts.Count == 0)
+            {
+                ProAlertStatusBadge.SetResourceReference(Border.BackgroundProperty, "SuccessSubtle");
+                TxtProAlertStatusText.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+                TxtProAlertStatusText.Text = "状态正常";
+                TxtActiveAlertsDetail.Text = "当前各项传感器均在安全阈值内。";
+                TxtActiveAlertsDetail.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            }
+            else
+            {
+                bool hasDanger = activeAlerts.Any(a => string.Equals(a.Severity, "danger", StringComparison.OrdinalIgnoreCase));
+                ProAlertStatusBadge.SetResourceReference(Border.BackgroundProperty, hasDanger ? "DangerSubtle" : "WarningSubtle");
+                TxtProAlertStatusText.SetResourceReference(TextBlock.ForegroundProperty, hasDanger ? "Danger" : "Warning");
+                TxtProAlertStatusText.Text = $"告警中 ({activeAlerts.Count})";
+                TxtActiveAlertsDetail.Text = string.Join("\n", activeAlerts.Select(a => $"• {a.Title}：{a.Message}"));
+                TxtActiveAlertsDetail.SetResourceReference(TextBlock.ForegroundProperty, hasDanger ? "Danger" : "Warning");
+            }
+        }
+        else
+        {
+            TxtDiagSensorMode.Text = _controller.IsElevated ? "管理员完整模式 · 初始化传感器中..." : "标准权限受限模式 · 初始化传感器中...";
+        }
+
+        // 5. Keep recording duration & sample count live while recording
+        var rec = _controller.RecordingStatus;
+        if (rec.IsRecording)
+        {
+            RefreshRecordingUi(rec);
+        }
+    }
+
+    private void RefreshRecordingUi(TelemetryRecordingStatus st)
+    {
+        if (st.IsRecording)
+        {
+            BtnToggleRecording.Content = "停止录制";
+            BtnToggleRecording.Style = (Style)FindResource("DangerButton");
+            TxtRecordingSummary.Text =
+                $"录制中 · {FormatDuration(st.DurationSeconds)} · {st.SampleCount} 样本 · {FormatByteSize(st.BytesWritten)} · {st.FileName}";
+            TxtRecordingSummary.SetResourceReference(TextBlock.ForegroundProperty, "AccentText");
+        }
+        else
+        {
+            BtnToggleRecording.Content = "开始录制 CSV";
+            BtnToggleRecording.Style = (Style)FindResource("PrimaryButton");
+            if (!string.IsNullOrWhiteSpace(st.LastError))
+            {
+                TxtRecordingSummary.Text = $"录制已停止（错误：{st.LastError}）";
+                TxtRecordingSummary.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            }
+            else if (st.SampleCount > 0 && !string.IsNullOrWhiteSpace(st.FileName))
+            {
+                TxtRecordingSummary.Text =
+                    $"已保存：{st.FileName}（共 {st.SampleCount} 样本 · {FormatDuration(st.DurationSeconds)}）";
+                TxtRecordingSummary.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            }
+            else
+            {
+                string dir = string.IsNullOrWhiteSpace(st.LogsDirectory)
+                    ? TelemetryRecorderService.GetDefaultLogsDirectory()
+                    : st.LogsDirectory;
+                TxtRecordingSummary.Text = $"未录制 · 日志将保存至 {dir}";
+                TxtRecordingSummary.SetResourceReference(TextBlock.ForegroundProperty, "TextMuted");
+            }
+        }
+    }
+
+    private static string FormatDuration(int totalSeconds)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, totalSeconds));
+        return ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours:D2}:{ts.Minutes:D2}:{ts.Seconds:D2}"
+            : $"{ts.Minutes:D2}:{ts.Seconds:D2}";
+    }
+
+    private static string FormatByteSize(long bytes)
+    {
+        if (bytes >= 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):0.0} MB";
+        if (bytes >= 1024) return $"{bytes / 1024.0:0.0} KB";
+        return $"{Math.Max(0, bytes)} B";
+    }
+
+    private void ChkAlertOption_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressEvents) return;
+        bool enabled = ChkAlertsEnabled.IsChecked == true;
+        bool trayNotify = ChkAlertTrayNotify.IsChecked == true;
+        _controller.UpdateSettings(s =>
+        {
+            s.Alerts.Enabled = enabled;
+            s.Alerts.TrayNotifyEnabled = trayNotify;
+        });
+    }
+
+    private void BtnAlertPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string preset) return;
+
+        var (cpuWarn, cpuCrit, gpuWarn, gpuCrit, ramWarn, diskWarn) = preset switch
+        {
+            "quiet" => (75, 88, 72, 82, 85, 88),
+            "oc" => (88, 98, 84, 95, 92, 92),
+            _ => (80, 92, 78, 88, 88, 90)
+        };
+
+        _controller.UpdateSettings(s =>
+        {
+            s.Alerts.Enabled = true;
+            s.Alerts.CpuTempWarnC = cpuWarn;
+            s.Alerts.CpuTempCritC = cpuCrit;
+            s.Alerts.GpuTempWarnC = gpuWarn;
+            s.Alerts.GpuTempCritC = gpuCrit;
+            s.Alerts.RamUsageWarnPct = ramWarn;
+            s.Alerts.DiskUsageWarnPct = diskWarn;
+        });
+        SyncAlertTextBoxesFromSettings();
+    }
+
+    private void AlertInput_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            ApplyAlertThresholds();
+            e.Handled = true;
+        }
+    }
+
+    private void BtnApplyAlerts_Click(object sender, RoutedEventArgs e) => ApplyAlertThresholds();
+
+    private void ApplyAlertThresholds()
+    {
+        var cur = _controller.Settings.Alerts ?? new AlertSettings();
+        int cpuWarn = int.TryParse(TxtAlertCpuWarn.Text.Trim(), out int v1) ? v1 : cur.CpuTempWarnC;
+        int cpuCrit = int.TryParse(TxtAlertCpuCrit.Text.Trim(), out int v2) ? v2 : cur.CpuTempCritC;
+        int gpuWarn = int.TryParse(TxtAlertGpuWarn.Text.Trim(), out int v3) ? v3 : cur.GpuTempWarnC;
+        int gpuCrit = int.TryParse(TxtAlertGpuCrit.Text.Trim(), out int v4) ? v4 : cur.GpuTempCritC;
+        int ramWarn = int.TryParse(TxtAlertRamWarn.Text.Trim(), out int v5) ? v5 : cur.RamUsageWarnPct;
+        int diskWarn = int.TryParse(TxtAlertDiskWarn.Text.Trim(), out int v6) ? v6 : cur.DiskUsageWarnPct;
+        int cooldown = int.TryParse(TxtAlertCooldown.Text.Trim(), out int v7) ? v7 : cur.CooldownSeconds;
+
+        _controller.UpdateSettings(s =>
+        {
+            s.Alerts.CpuTempWarnC = cpuWarn;
+            s.Alerts.CpuTempCritC = cpuCrit;
+            s.Alerts.GpuTempWarnC = gpuWarn;
+            s.Alerts.GpuTempCritC = gpuCrit;
+            s.Alerts.RamUsageWarnPct = ramWarn;
+            s.Alerts.DiskUsageWarnPct = diskWarn;
+            s.Alerts.CooldownSeconds = cooldown;
+        });
+        SyncAlertTextBoxesFromSettings();
+    }
+
+    private void SyncAlertTextBoxesFromSettings()
+    {
+        var a = _controller.Settings.Alerts;
+        TxtAlertCpuWarn.Text = a.CpuTempWarnC.ToString();
+        TxtAlertCpuCrit.Text = a.CpuTempCritC.ToString();
+        TxtAlertGpuWarn.Text = a.GpuTempWarnC.ToString();
+        TxtAlertGpuCrit.Text = a.GpuTempCritC.ToString();
+        TxtAlertRamWarn.Text = a.RamUsageWarnPct.ToString();
+        TxtAlertDiskWarn.Text = a.DiskUsageWarnPct.ToString();
+        TxtAlertCooldown.Text = a.CooldownSeconds.ToString();
+    }
+
+    private void PingTarget_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+        {
+            ApplyPingTarget();
+            e.Handled = true;
+        }
+    }
+
+    private void BtnApplyPingTarget_Click(object sender, RoutedEventArgs e) => ApplyPingTarget();
+
+    private void ApplyPingTarget()
+    {
+        string target = SettingsService.NormalizePingTarget(TxtPingTarget.Text);
+        TxtPingTarget.Text = target;
+        _controller.UpdateSettings(s => s.PingTargetHost = target);
+    }
+
+    private void BtnPingPreset_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button btn || btn.Tag is not string host) return;
+        string target = SettingsService.NormalizePingTarget(host);
+        TxtPingTarget.Text = target;
+        _controller.UpdateSettings(s => s.PingTargetHost = target);
+    }
+
+    private void BtnResetPeaks_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.ResetSessionStats();
+        RefreshLiveTelemetryUi(_controller.LastTelemetry);
+    }
+
+    private void BtnToggleRecording_Click(object sender, RoutedEventArgs e)
+    {
+        var res = _controller.ToggleRecording();
+        if (!res.Success)
+        {
+            System.Windows.MessageBox.Show(
+                res.ErrorMessage ?? "无法切换 CSV 录制状态，请检查文档目录写入权限。",
+                "星澪硬件监控",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private void BtnOpenLogsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        _controller.OpenLogsFolder();
+    }
+
+    private void BtnExportProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出星澪硬件监控配置文件",
+            Filter = "星澪配置文件 (*.miohud.json)|*.miohud.json|JSON 文件 (*.json)|*.json",
+            DefaultExt = ".miohud.json",
+            FileName = $"MioHUD_Profile_{DateTime.Now:yyyyMMdd}.miohud.json"
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        bool includePlacement = ChkExportIncludePlacement.IsChecked == true;
+        var res = _controller.ExportProfile(dlg.FileName, includePlacement);
+        if (res.Success)
+        {
+            TxtProfileStatus.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            TxtProfileStatus.Text = $"已导出配置方案：{System.IO.Path.GetFileName(dlg.FileName)}";
+        }
+        else
+        {
+            TxtProfileStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            TxtProfileStatus.Text = res.ErrorMessage ?? "导出配置文件失败。";
+            System.Windows.MessageBox.Show(
+                res.ErrorMessage ?? "导出配置文件失败。",
+                "星澪硬件监控",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private void BtnImportProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "导入星澪硬件监控配置文件",
+            Filter = "星澪配置文件 (*.miohud.json;*.json)|*.miohud.json;*.json|所有文件 (*.*)|*.*"
+        };
+        if (dlg.ShowDialog(this) != true) return;
+
+        var preview = _controller.PreviewProfile(dlg.FileName);
+        if (!preview.Success)
+        {
+            TxtProfileStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            TxtProfileStatus.Text = preview.ErrorMessage ?? "无法解析配置文件。";
+            System.Windows.MessageBox.Show(
+                preview.ErrorMessage ?? "无法解析所选配置文件。",
+                "导入配置失败",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var confirm = System.Windows.MessageBox.Show(
+            $"即将导入以下配置方案：\n\n{preview.Summary}\n\n确认应用到当前星澪硬件监控吗？",
+            "确认导入配置方案",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+        if (confirm != MessageBoxResult.Yes) return;
+
+        bool applyPlacement = preview.Summary.Contains("包含屏幕/窗口位置", StringComparison.Ordinal);
+        var res = _controller.ImportProfile(dlg.FileName, applyPlacement);
+        if (res.Success)
+        {
+            TxtProfileStatus.SetResourceReference(TextBlock.ForegroundProperty, "Success");
+            TxtProfileStatus.Text = $"已成功导入配置方案：{System.IO.Path.GetFileName(dlg.FileName)}";
+        }
+        else
+        {
+            TxtProfileStatus.SetResourceReference(TextBlock.ForegroundProperty, "Danger");
+            TxtProfileStatus.Text = res.ErrorMessage ?? "导入配置文件失败。";
+            System.Windows.MessageBox.Show(
+                res.ErrorMessage ?? "导入配置文件失败。",
+                "星澪硬件监控",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
     }
 
     private void RefreshUpdateSectionUi(AppSettings s)

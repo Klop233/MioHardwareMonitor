@@ -3,8 +3,11 @@ param(
     [string]$Tag = "",
     [string[]]$Archs = @("win-x64", "win-arm64"),
     [string]$OutputDir = "dist\release",
+    # Installer (Setup.exe) is REQUIRED by default; pass -SkipInstaller to only build portable ZIPs.
     [switch]$SkipInstaller,
-    [switch]$RequireInstaller
+    [switch]$RequireInstaller,
+    # Do not try to auto-install Inno Setup via winget when ISCC.exe is missing.
+    [switch]$NoAutoInstallInno
 )
 
 $ErrorActionPreference = "Stop"
@@ -34,25 +37,33 @@ if ([string]::IsNullOrWhiteSpace($Tag)) {
 $OutFull = if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $RepoRoot $OutputDir }
 New-Item -ItemType Directory -Force -Path $OutFull | Out-Null
 
-# Locate Inno Setup compiler (ISCC.exe) if installer generation is enabled
+function Find-Iscc {
+    $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    $candidates = @(
+        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+        "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
+        "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe",
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+    )
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path $c)) { return $c }
+    }
+    return $null
+}
+
+# Locate Inno Setup compiler (ISCC.exe); installer generation is mandatory unless -SkipInstaller
 $IsccPath = $null
 if (-not $SkipInstaller) {
-    $cmd = Get-Command iscc -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $IsccPath = $cmd.Source
-    } else {
-        $candidates = @(
-            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe",
-            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
-        )
-        foreach ($c in $candidates) {
-            if (Test-Path $c) { $IsccPath = $c; break }
-        }
+    $IsccPath = Find-Iscc
+    if (-not $IsccPath -and -not $NoAutoInstallInno -and (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "Inno Setup not found, installing via winget (JRSoftware.InnoSetup)..."
+        & winget install --id JRSoftware.InnoSetup -e --scope user --silent --accept-package-agreements --accept-source-agreements | Out-Host
+        $IsccPath = Find-Iscc
     }
 
-    if ($RequireInstaller -and -not $IsccPath) {
-        throw "Inno Setup (ISCC.exe) not found, but -RequireInstaller was specified."
+    if (-not $IsccPath) {
+        throw "Inno Setup (ISCC.exe) not found. Install it (winget install JRSoftware.InnoSetup) or pass -SkipInstaller to build ZIP only."
     }
 }
 
@@ -65,7 +76,8 @@ Write-Host "ISCC    : $(if ($IsccPath) { $IsccPath } else { 'Not installed (inst
 
 foreach ($rid in $Archs) {
     $archShort = $rid -replace '^win-', ''
-    $pubDir = Join-Path $RepoRoot "dist\publish\$rid"
+    # Versioned publish dir so a running older build (locked SideScreenHUD.exe) never blocks packaging
+    $pubDir = Join-Path $RepoRoot "dist\publish\$Tag\$rid"
     if (Test-Path $pubDir) {
         Remove-Item -Recurse -Force $pubDir
     }

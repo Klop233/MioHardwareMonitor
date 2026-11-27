@@ -31,6 +31,8 @@ public sealed class AppSettings
     public bool UseDirectDisplayExclusive { get; set; } = false;
     public string? DirectDisplayTargetId { get; set; }
     public int DirectDisplayFps { get; set; } = 10;
+    // Clockwise rotation (0/90/180/270) of the Direct Display output, for panels mounted upside-down or portrait
+    public int DirectDisplayRotation { get; set; } = 0;
 
     // Control (Settings) Window remembered position
     public double? ControlWindowLeft { get; set; }
@@ -46,14 +48,37 @@ public sealed class AppSettings
 
     // UI Preferences (MioLab Web UI Spec v1.0)
     public string Theme { get; set; } = "light"; // light | dark
-    public string LayoutMode { get; set; } = "split"; // split | hardware | market | custom
+    public string LayoutMode { get; set; } = AppFeatures.MarketEnabled ? "split" : "hardware"; // split | hardware | market | custom
     public string ColorScheme { get; set; } = "cn"; // cn | global
-    public int TelemetryIntervalMs { get; set; } = 1000;
-    public string CpuViewMode { get; set; } = "cores"; // cores | overall
+    // Color skin (accent + surface tint). See Services/SkinCatalog.cs for the full palette table.
+    public string Skin { get; set; } = "miolab";
+    // HUD visual presentation style: "instrument" (gauges/arcs/meters) | "flat" (clean cards)
+    public string HudStyle { get; set; } = "instrument";
+    // True OLED #000000 black surfaces when Theme == "dark"
+    public bool OledTrueBlack { get; set; } = false;
+    // Mask middle octets of public IPv4 on the HUD for privacy/streaming
+    public bool MaskPublicIp { get; set; } = false;
+    // ICMP latency target host for live ping/jitter/loss telemetry
+    public string PingTargetHost { get; set; } = "223.5.5.5";
+    // Thermal & resource threshold alerts
+    public AlertSettings Alerts { get; set; } = new();
+    // Sampling intensity. Controls how often the heavy sensors (LibreHardwareMonitor, GPU PDH,
+    // process enumeration) are refreshed, so the monitor itself stays light on CPU by default.
+    public string PerformanceMode { get; set; } = "balanced"; // eco | balanced | realtime
+    public int TelemetryIntervalMs { get; set; } = 1500;
+    public string CpuViewMode { get; set; } = "compact"; // compact | cores | overall
     public string CpuDisplayTarget { get; set; } = "auto"; // auto | all | combined | "0" | "1" | ...
     public string ProcessSortBy { get; set; } = "cpu"; // cpu | mem
     public bool OledPixelShift { get; set; } = false;
     public bool MinimizeToTray { get; set; } = true;
+
+    // Multi-page HUD & Process Hacker style Process/Thread Tree preferences
+    public string MonitorPage { get; set; } = "overview"; // overview | proctree
+    public string ProcessTreeViewMode { get; set; } = "tree"; // tree | flat
+    public string ProcessTreeSortBy { get; set; } = "cpu"; // cpu | mem | io | threads | handles | pid | name
+    public bool ProcessTreeAutoFollowTop { get; set; } = true;
+    public int ProcessTreePinnedPid { get; set; } = 0;
+    public string ProcessTreeFilter { get; set; } = "";
 
     // Software Update Preferences
     public bool AutoCheckUpdates { get; set; } = true;
@@ -63,7 +88,7 @@ public sealed class AppSettings
     public string DonationApiBaseUrl { get; set; } = Services.DonationService.DefaultApiBaseUrl;
 
     // Custom Dashboard Layout Editor configuration (12x8 grid by default)
-    public CustomLayoutConfig CustomLayout { get; set; } = CustomLayoutConfig.CreatePreset("split");
+    public CustomLayoutConfig CustomLayout { get; set; } = CustomLayoutConfig.CreatePreset(CustomLayoutConfig.DefaultPreset);
 
     // FX Converter display preferences (configured in Settings Window, displayed read-only on Monitor Window)
     public double FxAmount { get; set; } = 100;
@@ -80,6 +105,36 @@ public sealed class AppSettings
     public bool ShowBoll { get; set; } = false;
     public bool ShowVolume { get; set; } = true;
     public List<WatchlistSymbol> CustomSymbols { get; set; } = new();
+
+    // ---- Feature gates surfaced to the monitor UI so it can skip hidden surfaces entirely ----
+    public bool MarketEnabled => AppFeatures.MarketEnabled;
+    public bool DonationEnabled => AppFeatures.DonationEnabled;
+}
+
+public sealed class AlertSettings
+{
+    public bool Enabled { get; set; } = true;
+    public bool TrayNotifyEnabled { get; set; } = true;
+    public int CooldownSeconds { get; set; } = 60;
+    public int CpuTempWarnC { get; set; } = 80;
+    public int CpuTempCritC { get; set; } = 92;
+    public int GpuTempWarnC { get; set; } = 78;
+    public int GpuTempCritC { get; set; } = 88;
+    public int RamUsageWarnPct { get; set; } = 88;
+    public int DiskUsageWarnPct { get; set; } = 90;
+
+    public AlertSettings Clone() => new()
+    {
+        Enabled = Enabled,
+        TrayNotifyEnabled = TrayNotifyEnabled,
+        CooldownSeconds = CooldownSeconds,
+        CpuTempWarnC = CpuTempWarnC,
+        CpuTempCritC = CpuTempCritC,
+        GpuTempWarnC = GpuTempWarnC,
+        GpuTempCritC = GpuTempCritC,
+        RamUsageWarnPct = RamUsageWarnPct,
+        DiskUsageWarnPct = DiskUsageWarnPct
+    };
 }
 
 public sealed class DashboardWidgetLayout
@@ -111,11 +166,18 @@ public sealed class CustomLayoutConfig
         ("ram", "系统内存", "内存"),
         ("network", "网络与出口 IPv4", "网络"),
         ("disk", "存储与读写", "存储"),
+        ("sensors", "散热与系统传感器", "散热"),
         ("processes", "高占用进程", "进程"),
         ("kline", "K 线图表", "K 线"),
         ("watchlist", "行情列表", "行情"),
         ("fx", "汇率换算", "汇率")
     };
+
+    public static bool IsMarketWidget(string id) =>
+        !string.IsNullOrWhiteSpace(id) &&
+        (id.Equals("kline", StringComparison.OrdinalIgnoreCase) ||
+         id.Equals("watchlist", StringComparison.OrdinalIgnoreCase) ||
+         id.Equals("fx", StringComparison.OrdinalIgnoreCase));
 
     public int Columns { get; set; } = 12;
     public int Rows { get; set; } = 8;
@@ -129,6 +191,9 @@ public sealed class CustomLayoutConfig
         GapPx = GapPx,
         Widgets = Widgets.Select(w => w.Clone()).ToList()
     };
+
+    /// <summary>Preset used for defaults and "reset layout"; never points at a gated-off surface.</summary>
+    public static string DefaultPreset => AppFeatures.MarketEnabled ? "split" : "hardware";
 
     public static string GetWidgetTitle(string id)
     {
@@ -151,7 +216,8 @@ public sealed class CustomLayoutConfig
                 GapPx = 12,
                 Widgets = new List<DashboardWidgetLayout>
                 {
-                    new() { Id = "cpu",       Visible = true,  Col = 1, Row = 1, ColSpan = 7, RowSpan = 5 },
+                    new() { Id = "cpu",       Visible = true,  Col = 1, Row = 1, ColSpan = 7, RowSpan = 3 },
+                    new() { Id = "sensors",   Visible = true,  Col = 1, Row = 4, ColSpan = 7, RowSpan = 2 },
                     new() { Id = "processes", Visible = true,  Col = 1, Row = 6, ColSpan = 7, RowSpan = 3 },
                     new() { Id = "gpu",       Visible = true,  Col = 8, Row = 1, ColSpan = 5, RowSpan = 2 },
                     new() { Id = "ram",       Visible = true,  Col = 8, Row = 3, ColSpan = 5, RowSpan = 2 },
@@ -162,36 +228,58 @@ public sealed class CustomLayoutConfig
                     new() { Id = "fx",        Visible = false, Col = 1, Row = 8, ColSpan = 6, RowSpan = 1 }
                 }
             },
-            "portrait" => new CustomLayoutConfig
-            {
-                Columns = 6,
-                Rows = 12,
-                GapPx = 10,
-                Widgets = new List<DashboardWidgetLayout>
+            "portrait" => AppFeatures.MarketEnabled
+                ? new CustomLayoutConfig
                 {
-                    new() { Id = "cpu",       Visible = true,  Col = 1, Row = 1,  ColSpan = 6, RowSpan = 3 },
-                    new() { Id = "gpu",       Visible = true,  Col = 1, Row = 4,  ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "ram",       Visible = true,  Col = 4, Row = 4,  ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "network",   Visible = true,  Col = 1, Row = 6,  ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "disk",      Visible = true,  Col = 4, Row = 6,  ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "kline",     Visible = true,  Col = 1, Row = 8,  ColSpan = 6, RowSpan = 3 },
-                    new() { Id = "processes", Visible = true,  Col = 1, Row = 11, ColSpan = 6, RowSpan = 2 },
-                    new() { Id = "watchlist", Visible = false, Col = 1, Row = 8,  ColSpan = 6, RowSpan = 3 },
-                    new() { Id = "fx",        Visible = false, Col = 1, Row = 12, ColSpan = 6, RowSpan = 1 }
+                    Columns = 6,
+                    Rows = 12,
+                    GapPx = 10,
+                    Widgets = new List<DashboardWidgetLayout>
+                    {
+                        new() { Id = "cpu",       Visible = true,  Col = 1, Row = 1,  ColSpan = 6, RowSpan = 2 },
+                        new() { Id = "gpu",       Visible = true,  Col = 1, Row = 3,  ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "ram",       Visible = true,  Col = 4, Row = 3,  ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "network",   Visible = true,  Col = 1, Row = 5,  ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "disk",      Visible = true,  Col = 4, Row = 5,  ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "sensors",   Visible = false, Col = 1, Row = 5,  ColSpan = 6, RowSpan = 2 },
+                        new() { Id = "kline",     Visible = true,  Col = 1, Row = 7,  ColSpan = 6, RowSpan = 3 },
+                        new() { Id = "processes", Visible = true,  Col = 1, Row = 10, ColSpan = 6, RowSpan = 3 },
+                        new() { Id = "watchlist", Visible = false, Col = 1, Row = 7,  ColSpan = 6, RowSpan = 3 },
+                        new() { Id = "fx",        Visible = false, Col = 1, Row = 12, ColSpan = 6, RowSpan = 1 }
+                    }
                 }
-            },
+                : new CustomLayoutConfig
+                {
+                    Columns = 6,
+                    Rows = 12,
+                    GapPx = 10,
+                    Widgets = new List<DashboardWidgetLayout>
+                    {
+                        new() { Id = "cpu",       Visible = true,  Col = 1, Row = 1, ColSpan = 6, RowSpan = 2 },
+                        new() { Id = "gpu",       Visible = true,  Col = 1, Row = 3, ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "ram",       Visible = true,  Col = 4, Row = 3, ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "sensors",   Visible = true,  Col = 1, Row = 5, ColSpan = 6, RowSpan = 2 },
+                        new() { Id = "network",   Visible = true,  Col = 1, Row = 7, ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "disk",      Visible = true,  Col = 4, Row = 7, ColSpan = 3, RowSpan = 2 },
+                        new() { Id = "processes", Visible = true,  Col = 1, Row = 9, ColSpan = 6, RowSpan = 4 },
+                        new() { Id = "kline",     Visible = false, Col = 1, Row = 7, ColSpan = 6, RowSpan = 3 },
+                        new() { Id = "watchlist", Visible = false, Col = 1, Row = 7, ColSpan = 6, RowSpan = 3 },
+                        new() { Id = "fx",        Visible = false, Col = 1, Row = 12, ColSpan = 6, RowSpan = 1 }
+                    }
+                },
             "bar" => new CustomLayoutConfig
             {
                 Columns = 12,
                 Rows = 4,
-                GapPx = 10,
+                GapPx = 8,
                 Widgets = new List<DashboardWidgetLayout>
                 {
-                    new() { Id = "cpu",       Visible = true,  Col = 1,  Row = 1, ColSpan = 5, RowSpan = 4 },
-                    new() { Id = "gpu",       Visible = true,  Col = 6,  Row = 1, ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "ram",       Visible = true,  Col = 9,  Row = 1, ColSpan = 4, RowSpan = 2 },
-                    new() { Id = "network",   Visible = true,  Col = 6,  Row = 3, ColSpan = 4, RowSpan = 2 },
-                    new() { Id = "disk",      Visible = true,  Col = 10, Row = 3, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "cpu",       Visible = true,  Col = 1,  Row = 1, ColSpan = 4, RowSpan = 4 },
+                    new() { Id = "gpu",       Visible = true,  Col = 5,  Row = 1, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "ram",       Visible = true,  Col = 8,  Row = 1, ColSpan = 2, RowSpan = 2 },
+                    new() { Id = "sensors",   Visible = true,  Col = 10, Row = 1, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "network",   Visible = true,  Col = 5,  Row = 3, ColSpan = 4, RowSpan = 2 },
+                    new() { Id = "disk",      Visible = true,  Col = 9,  Row = 3, ColSpan = 4, RowSpan = 2 },
                     new() { Id = "processes", Visible = false, Col = 1,  Row = 1, ColSpan = 4, RowSpan = 2 },
                     new() { Id = "kline",     Visible = false, Col = 1,  Row = 1, ColSpan = 6, RowSpan = 4 },
                     new() { Id = "watchlist", Visible = false, Col = 7,  Row = 1, ColSpan = 6, RowSpan = 4 },
@@ -213,6 +301,7 @@ public sealed class CustomLayoutConfig
                     new() { Id = "gpu",       Visible = false, Col = 1, Row = 7, ColSpan = 3, RowSpan = 2 },
                     new() { Id = "ram",       Visible = false, Col = 4, Row = 7, ColSpan = 3, RowSpan = 2 },
                     new() { Id = "disk",      Visible = false, Col = 7, Row = 7, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "sensors",   Visible = false, Col = 1, Row = 7, ColSpan = 4, RowSpan = 2 },
                     new() { Id = "processes", Visible = false, Col = 1, Row = 7, ColSpan = 6, RowSpan = 2 }
                 }
             },
@@ -223,15 +312,16 @@ public sealed class CustomLayoutConfig
                 GapPx = 12,
                 Widgets = new List<DashboardWidgetLayout>
                 {
-                    new() { Id = "cpu",       Visible = true, Col = 1, Row = 1, ColSpan = 6, RowSpan = 3 },
-                    new() { Id = "gpu",       Visible = true, Col = 1, Row = 4, ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "ram",       Visible = true, Col = 4, Row = 4, ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "network",   Visible = true, Col = 1, Row = 6, ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "disk",      Visible = true, Col = 4, Row = 6, ColSpan = 3, RowSpan = 2 },
-                    new() { Id = "processes", Visible = true, Col = 1, Row = 8, ColSpan = 6, RowSpan = 1 },
-                    new() { Id = "kline",     Visible = true, Col = 7, Row = 1, ColSpan = 6, RowSpan = 4 },
-                    new() { Id = "watchlist", Visible = true, Col = 7, Row = 5, ColSpan = 6, RowSpan = 3 },
-                    new() { Id = "fx",        Visible = true, Col = 7, Row = 8, ColSpan = 6, RowSpan = 1 }
+                    new() { Id = "cpu",       Visible = true,  Col = 1, Row = 1, ColSpan = 6, RowSpan = 3 },
+                    new() { Id = "gpu",       Visible = true,  Col = 1, Row = 4, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "ram",       Visible = true,  Col = 4, Row = 4, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "network",   Visible = true,  Col = 1, Row = 6, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "disk",      Visible = true,  Col = 4, Row = 6, ColSpan = 3, RowSpan = 2 },
+                    new() { Id = "sensors",   Visible = false, Col = 1, Row = 8, ColSpan = 6, RowSpan = 1 },
+                    new() { Id = "processes", Visible = true,  Col = 1, Row = 8, ColSpan = 6, RowSpan = 1 },
+                    new() { Id = "kline",     Visible = true,  Col = 7, Row = 1, ColSpan = 6, RowSpan = 4 },
+                    new() { Id = "watchlist", Visible = true,  Col = 7, Row = 5, ColSpan = 6, RowSpan = 3 },
+                    new() { Id = "fx",        Visible = true,  Col = 7, Row = 8, ColSpan = 6, RowSpan = 1 }
                 }
             }
         };

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light" data-colors="cn" data-layout="split" data-fullscreen="false" data-window-locked="true" data-hide-topbar="false">
+<html lang="zh-CN" data-theme="light" data-colors="cn" data-layout="hardware" data-market="off" data-style="instrument" data-hud-style="instrument" data-oled-black="false" data-fullscreen="false" data-window-locked="true" data-hide-topbar="false" data-direct-exclusive="false" data-page="overview" data-cpu-view="compact">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,7 +9,7 @@
 </head>
 <body>
   <div id="hud-root" class="hud-root">
-    <!-- Pure Data Display Top Bar (No settings controls; all settings live in Settings Window) -->
+    <!-- Top Bar: Brand + Multi-Page Switcher + Clock + Status Pills -->
     <header id="topbar" class="topbar">
       <div class="brand-block" data-drag="true">
         <span class="brand-name">星澪科技</span>
@@ -18,6 +18,14 @@
       </div>
 
       <div class="topbar-main">
+        <!-- Interactive page switcher in Desktop Window mode -->
+        <nav id="page-switcher" class="page-switcher" aria-label="监控页面切换">
+          <button id="tab-page-overview" type="button" class="page-tab active" data-page="overview" title="硬件监控总览 (Alt+1)">硬件总览</button>
+          <button id="tab-page-proctree" type="button" class="page-tab" data-page="proctree" title="进程与线程树 (Alt+2)">进程与线程树</button>
+        </nav>
+        <!-- Clean read-only active page badge in Hardware Direct Display Exclusive mode -->
+        <span id="direct-page-pill" class="status-pill info hidden">硬件总览</span>
+
         <div class="topbar-drag-zone" data-drag="true">
           <span id="clock-datetime" class="mono topbar-clock">—</span>
           <span class="topbar-sep" aria-hidden="true"></span>
@@ -26,6 +34,8 @@
         </div>
 
         <div class="topbar-actions">
+          <span id="rec-topbar-pill" class="status-pill danger mono hidden">● REC 00:00</span>
+          <span id="alert-topbar-pill" class="status-pill warning hidden"></span>
           <span id="window-mode-badge" class="status-pill neutral">固定已锁定</span>
         </div>
       </div>
@@ -45,9 +55,9 @@
 
     <!-- Main Pure Data Grid (Built-in Layouts: split / hardware / market) -->
     <main id="builtin-main" class="main-grid">
-      <!-- LEFT: HARDWARE MONITOR PANEL -->
+      <!-- HARDWARE MONITOR PANEL -->
       <section class="hardware-panel" aria-label="硬件监控">
-        <!-- 1. CPU Monitor Card (Single & Multi-CPU Task Manager Logical Processors Grid) -->
+        <!-- 1. CPU Monitor Card (Compact / Task Manager Logical Processors / Overall + Multi-CPU) -->
         <article id="widget-cpu" class="card cpu-card" data-widget="cpu">
           <div class="card-head">
             <div class="card-title-group">
@@ -56,33 +66,44 @@
             </div>
             <div class="card-head-right">
               <span id="cpu-socket-pill" class="status-pill info hidden">2 路</span>
-              <span id="cpu-view-pill" class="status-pill neutral">逻辑处理器</span>
+              <span id="cpu-view-pill" class="status-pill neutral">紧凑核心格</span>
               <span id="cpu-health-pill" class="status-pill success">健康正常</span>
             </div>
           </div>
 
           <div id="cpu-single-body" class="cpu-single-body">
-            <div class="kpi-strip">
-              <div class="kpi-cell">
-                <span class="label-muted">总利用率</span>
-                <span id="cpu-pct" class="mono kpi-big">0%</span>
+            <div class="cpu-hero-row">
+              <div class="instrument-gauge-slot">
+                <canvas id="gauge-cpu" class="full-canvas"></canvas>
               </div>
-              <div class="kpi-cell">
-                <span class="label-muted">当前 / 基准频率</span>
-                <span id="cpu-clock" class="mono kpi-val">—</span>
-              </div>
-              <div class="kpi-cell">
-                <span class="label-muted">核心 / 线程</span>
-                <span id="cpu-cores" class="mono kpi-val">—</span>
-              </div>
-              <div class="kpi-cell">
-                <span class="label-muted">封装温度 / 功耗</span>
-                <span id="cpu-temp-power" class="mono kpi-val">—</span>
+              <div class="kpi-strip">
+                <div class="kpi-cell kpi-cell-pct">
+                  <span class="label-muted">总利用率</span>
+                  <span id="cpu-pct" class="mono kpi-big">0%</span>
+                </div>
+                <div class="kpi-cell">
+                  <span class="label-muted">当前 / 基准频率</span>
+                  <span id="cpu-clock" class="mono kpi-val">—</span>
+                </div>
+                <div class="kpi-cell">
+                  <span class="label-muted">核心 / 线程</span>
+                  <span id="cpu-cores" class="mono kpi-val">—</span>
+                </div>
+                <div class="kpi-cell">
+                  <span class="label-muted">封装温度 / 功耗</span>
+                  <div class="kpi-temp-wrap">
+                    <span id="cpu-temp-power" class="mono kpi-val">—</span>
+                    <button id="cpu-elevate-btn" type="button" class="elevate-chip hidden" title="以管理员权限重启可读取 CPU 温度与主板传感器">提权读温</button>
+                    <span id="cpu-elevate-hint" class="elevate-chip readonly hidden">管理面板可提权</span>
+                  </div>
+                </div>
               </div>
             </div>
 
+            <div id="cpu-session-stats" class="session-stats-line mono hidden"></div>
+
             <div class="cpu-graph-bar">
-              <span id="cpu-graph-caption" class="label-muted">所有逻辑处理器（60 秒实时曲线）</span>
+              <span id="cpu-graph-caption" class="label-muted">逻辑处理器（紧凑核心格）</span>
               <span id="cpu-core-hover" class="mono cpu-hover-info">悬停核心查看单核读数</span>
             </div>
 
@@ -111,16 +132,21 @@
             </div>
 
             <div class="metric-row">
+              <div class="instrument-gauge-slot sm">
+                <canvas id="gauge-gpu" class="full-canvas"></canvas>
+              </div>
               <div class="metric-primary">
                 <span id="gpu-pct" class="mono kpi-big">0%</span>
                 <span id="gpu-clock" class="mono metric-sub">—</span>
               </div>
               <dl class="detail-grid compact">
-                <dt>温度 / 热点</dt><dd id="gpu-temp" class="mono">—</dd>
+                <dt id="gpu-temp-label">温度 / 热点</dt><dd id="gpu-temp" class="mono">—</dd>
                 <dt>功耗 / 风扇</dt><dd id="gpu-power-fan" class="mono">—</dd>
-                <dt>显存频率</dt><dd id="gpu-mem-clk" class="mono">—</dd>
+                <dt>核心 / 显存</dt><dd id="gpu-mem-clk" class="mono">—</dd>
               </dl>
             </div>
+
+            <div id="gpu-session-stats" class="session-stats-line mono hidden"></div>
 
             <div class="spark-box">
               <canvas id="spark-gpu" class="full-canvas"></canvas>
@@ -149,6 +175,9 @@
             </div>
 
             <div class="metric-row">
+              <div class="instrument-gauge-slot sm">
+                <canvas id="gauge-ram" class="full-canvas"></canvas>
+              </div>
               <div class="metric-primary">
                 <span id="ram-pct" class="mono kpi-big">0%</span>
                 <span id="ram-used-total" class="mono metric-sub">0.0 / 0.0 GB</span>
@@ -157,8 +186,11 @@
                 <dt>已用内存</dt><dd id="ram-used-only" class="mono">—</dd>
                 <dt>可用内存</dt><dd id="ram-avail" class="mono">—</dd>
                 <dt>总容量</dt><dd id="ram-total-only" class="mono">—</dd>
+                <dt id="ram-commit-dt" class="hidden">已提交</dt><dd id="ram-commit" class="mono hidden">—</dd>
               </dl>
             </div>
+
+            <div id="ram-session-stats" class="session-stats-line mono hidden"></div>
 
             <div class="bar-block">
               <div class="progress-track" role="progressbar" aria-label="系统内存占用">
@@ -172,7 +204,7 @@
           </article>
         </div>
 
-        <!-- 3. Network (Domestic & Overseas IPv4) + Disk Row -->
+        <!-- 3. Network (Domestic & Overseas IPv4 + Purity/Fraud + Ping) + Disk Row -->
         <div class="hw-two-col">
           <!-- Network Card -->
           <article id="widget-network" class="card net-card" data-widget="network">
@@ -181,7 +213,10 @@
                 <h2 class="card-title">网络监控</h2>
                 <span id="net-adapter" class="card-subtitle">检测中</span>
               </div>
-              <span id="ip-status-pill" class="status-pill neutral">IPv4</span>
+              <div class="card-head-right">
+                <span id="net-ping-pill" class="status-pill neutral mono hidden">— ms</span>
+                <span id="ip-status-pill" class="status-pill neutral">IPv4</span>
+              </div>
             </div>
 
             <div class="net-speed-strip">
@@ -199,16 +234,22 @@
               </div>
             </div>
 
-            <dl class="ip-detail-list" aria-label="出口 IPv4 地址">
+            <dl class="ip-detail-list" aria-label="出口 IPv4 地址与纯净度">
               <dt>国内站 IP</dt>
               <dd class="ip-val-cell">
-                <span id="ip-domestic" class="mono ip-addr">检测中</span>
-                <span id="ip-domestic-loc" class="ip-loc">—</span>
+                <span class="ip-main-group">
+                  <span id="ip-domestic" class="mono ip-addr">检测中</span>
+                  <span id="ip-domestic-loc" class="ip-loc">—</span>
+                </span>
+                <span id="ip-domestic-risk" class="ip-risk-pill mono hidden"></span>
               </dd>
               <dt>国外站 IP</dt>
               <dd class="ip-val-cell">
-                <span id="ip-overseas" class="mono ip-addr">检测中</span>
-                <span id="ip-overseas-loc" class="ip-loc">—</span>
+                <span class="ip-main-group">
+                  <span id="ip-overseas" class="mono ip-addr">检测中</span>
+                  <span id="ip-overseas-loc" class="ip-loc">—</span>
+                </span>
+                <span id="ip-overseas-risk" class="ip-risk-pill mono hidden"></span>
               </dd>
             </dl>
 
@@ -233,7 +274,38 @@
           </article>
         </div>
 
-        <!-- 4. Top Processes Table Card (Pure Read-Only Table) -->
+        <!-- 4. Cooling & System Sensors Card -->
+        <article id="widget-sensors" class="card sensors-card" data-widget="sensors">
+          <div class="card-head">
+            <div class="card-title-group">
+              <h2 class="card-title">散热与传感器</h2>
+              <span id="sensors-mobo-name" class="card-subtitle">系统传感器</span>
+            </div>
+            <div class="card-head-right">
+              <span id="sensors-power-pill" class="status-pill info mono hidden">— W</span>
+            </div>
+          </div>
+          <div id="sensors-grid" class="sensors-grid">
+            <div id="sensors-fans-sec" class="sensor-sec">
+              <div class="sensor-sec-title">风扇转速</div>
+              <div id="sensors-fans-list" class="sensor-list"></div>
+            </div>
+            <div id="sensors-mobo-sec" class="sensor-sec">
+              <div class="sensor-sec-title">主板 / 供电温度</div>
+              <div id="sensors-mobo-list" class="sensor-list"></div>
+            </div>
+            <div id="sensors-storage-sec" class="sensor-sec">
+              <div class="sensor-sec-title">硬盘温度 / 健康</div>
+              <div id="sensors-storage-list" class="sensor-list"></div>
+            </div>
+            <div id="sensors-battery-sec" class="sensor-sec hidden">
+              <div class="sensor-sec-title">电池与电源</div>
+              <div id="sensors-battery-body" class="sensor-list"></div>
+            </div>
+          </div>
+        </article>
+
+        <!-- 5. Top Processes Table Card -->
         <article id="widget-processes" class="card proc-card" data-widget="processes">
           <div class="card-head">
             <div class="card-title-group">
@@ -253,9 +325,8 @@
         </article>
       </section>
 
-      <!-- RIGHT: PURE READ-ONLY MARKET & K-LINE PANEL -->
+      <!-- RIGHT: PURE READ-ONLY MARKET & K-LINE PANEL (only when MarketEnabled) -->
       <section class="market-panel" aria-label="行情与 K 线">
-        <!-- K-Line Card -->
         <article id="widget-kline" class="card kline-card" data-widget="kline">
           <div class="kline-top">
             <div class="kline-title-col">
@@ -294,7 +365,6 @@
           </div>
         </article>
 
-        <!-- Watchlist + Read-Only FX Rate Display Card -->
         <article id="widget-watchlist" class="card watchlist-card" data-widget="watchlist">
           <div class="watchlist-head">
             <div class="card-title-group">
@@ -307,7 +377,6 @@
 
           <div id="watchlist-grid" class="watchlist-grid"></div>
 
-          <!-- Pure Read-Only FX Conversion Strip (configured in Settings Window) -->
           <div id="fx-readonly-bar" class="fx-readonly-bar" aria-label="实时汇率换算">
             <span class="label-muted">汇率换算</span>
             <span id="fx-expression" class="mono fx-expr">100 USD = — CNY</span>
@@ -326,6 +395,152 @@
 
     <!-- Compact Market Ticker Strip (Hardware Focus mode only) -->
     <div id="compact-market-strip" class="compact-strip market-strip hidden" aria-label="行情摘要"></div>
+
+    <!-- PAGE 2: PROCESS HACKER STYLE PROCESS & LIVE THREAD TREE -->
+    <main id="proctree-page" class="proctree-page" aria-label="进程与线程树监控">
+      <!-- Toolbar -->
+      <div class="pt-toolbar">
+        <div class="pt-summary-strip mono">
+          <span class="pt-stat-item"><span class="label-muted">进程</span><strong id="pt-stat-procs">—</strong></span>
+          <span class="pt-stat-sep" aria-hidden="true"></span>
+          <span class="pt-stat-item"><span class="label-muted">线程</span><strong id="pt-stat-threads">—</strong></span>
+          <span class="pt-stat-sep" aria-hidden="true"></span>
+          <span class="pt-stat-item"><span class="label-muted">句柄</span><strong id="pt-stat-handles">—</strong></span>
+        </div>
+
+        <!-- Direct Display Exclusive Mode Status Bar (read-only pills, zero mouse controls) -->
+        <div class="pt-direct-status">
+          <span id="pt-direct-mode-pill" class="status-pill neutral mono">树状层级 · 按 CPU</span>
+          <span id="pt-direct-follow-pill" class="status-pill info">硬件独占 · 自动追踪 Top CPU</span>
+          <span id="pt-direct-filter-pill" class="status-pill warning mono hidden"></span>
+        </div>
+
+        <!-- Desktop Window Interactive Controls -->
+        <div class="pt-controls">
+          <div class="pt-search-box">
+            <input id="pt-filter-input" type="text" class="pt-search-input" placeholder="筛选进程名 / PID / 路径..." maxlength="64" autocomplete="off" spellcheck="false" />
+            <button id="pt-filter-clear" type="button" class="pt-clear-btn hidden" title="清除筛选">×</button>
+          </div>
+
+          <div class="pt-seg-group" role="group" aria-label="视图模式">
+            <button id="pt-view-tree" type="button" class="pt-chip active" data-view="tree">树状层级</button>
+            <button id="pt-view-flat" type="button" class="pt-chip" data-view="flat">扁平排行</button>
+          </div>
+
+          <div id="pt-sort-group" class="pt-seg-group" role="group" aria-label="排序依据">
+            <button type="button" class="pt-chip active" data-sort="cpu">CPU</button>
+            <button type="button" class="pt-chip" data-sort="mem">内存</button>
+            <button type="button" class="pt-chip" data-sort="io">I/O</button>
+            <button type="button" class="pt-chip" data-sort="threads">线程</button>
+            <button type="button" class="pt-chip" data-sort="handles">句柄</button>
+            <button type="button" class="pt-chip" data-sort="pid">PID</button>
+            <button type="button" class="pt-chip" data-sort="name">名称</button>
+          </div>
+
+          <button id="pt-autofollow-btn" type="button" class="pt-toggle-pill active" title="自动追踪 CPU 占用最高的进程">自动追踪 Top</button>
+
+          <div id="pt-tree-fold-group" class="pt-seg-group">
+            <button id="pt-expand-all" type="button" class="pt-chip" title="展开全部父节点">全展</button>
+            <button id="pt-collapse-all" type="button" class="pt-chip" title="折叠全部子节点">全收</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Master-Detail Split Workspace -->
+      <div class="pt-workspace">
+        <!-- Master: Process Tree Table -->
+        <section class="card pt-tree-pane" aria-label="系统进程树">
+          <div class="pt-pane-head">
+            <div class="card-title-group">
+              <h2 class="card-title">进程层级列表</h2>
+              <span id="pt-shown-count" class="status-pill neutral mono">0 项</span>
+            </div>
+            <div class="pt-legend">
+              <span class="pt-leg-item"><i class="pt-swatch swatch-new"></i>新建</span>
+              <span class="pt-leg-item"><i class="pt-swatch swatch-exited"></i>退出</span>
+              <span class="pt-leg-item"><i class="pt-swatch swatch-service"></i>服务</span>
+              <span class="pt-leg-item"><i class="pt-swatch swatch-elevated"></i>提权</span>
+              <span class="pt-leg-item"><i class="pt-swatch swatch-system"></i>系统</span>
+            </div>
+          </div>
+
+          <div class="pt-table">
+            <div class="pt-thead" role="row">
+              <span>进程 / 层级</span>
+              <span class="align-right">PID</span>
+              <span class="align-right">CPU</span>
+              <span class="align-right">工作集</span>
+              <span class="align-right pt-col-io">I/O 速率</span>
+              <span class="align-right pt-col-thr">线程</span>
+              <span class="align-right pt-col-hdl">句柄</span>
+              <span class="align-right pt-col-pri">优先级</span>
+            </div>
+            <div id="pt-process-list" class="pt-tbody" role="rowgroup">
+              <div class="pt-empty-state">正在采集系统进程树...</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Detail: Live Thread Inspector -->
+        <section class="card pt-detail-pane" aria-label="进程详情与实时线程树">
+          <div class="pt-detail-head">
+            <div class="pt-det-title-wrap">
+              <h2 id="pt-det-name" class="card-title pt-det-name">等待选择进程</h2>
+              <span id="pt-det-pid" class="status-pill neutral mono">PID —</span>
+              <span id="pt-det-cat" class="status-pill neutral hidden">—</span>
+              <span id="pt-det-pri" class="status-pill neutral hidden">—</span>
+              <span id="pt-det-pin-badge" class="status-pill info hidden">自动追踪</span>
+            </div>
+            <div class="pt-detail-actions">
+              <button id="pt-act-open-loc" type="button" class="pt-act-btn" disabled>打开目录</button>
+              <button id="pt-act-copy-path" type="button" class="pt-act-btn" disabled>复制路径</button>
+              <button id="pt-act-terminate" type="button" class="pt-act-btn danger" disabled>结束进程</button>
+            </div>
+          </div>
+
+          <div id="pt-action-toast" class="pt-action-toast hidden"></div>
+
+          <div class="pt-detail-meta">
+            <div class="pt-meta-path-row">
+              <span class="label-muted">路径</span>
+              <span id="pt-det-path" class="mono pt-meta-path">—</span>
+              <span id="pt-det-denied-pill" class="status-pill warning hidden">权限受限</span>
+            </div>
+            <div class="pt-meta-grid mono">
+              <div class="pt-meta-kv"><span class="label-muted">父进程</span><strong id="pt-det-parent">—</strong></div>
+              <div class="pt-meta-kv"><span class="label-muted">启动 / 运行</span><strong id="pt-det-uptime">—</strong></div>
+              <div class="pt-meta-kv"><span class="label-muted">工作集 / 专用</span><strong id="pt-det-mem">—</strong></div>
+              <div class="pt-meta-kv"><span class="label-muted">累计 I/O</span><strong id="pt-det-io">—</strong></div>
+            </div>
+          </div>
+
+          <div class="pt-thread-bar">
+            <div class="card-title-group">
+              <span class="pt-sub-title">实时线程树</span>
+              <span id="pt-thread-count-pill" class="status-pill neutral mono">0 线程</span>
+            </div>
+            <div class="pt-thread-legend">
+              <span class="pt-leg-item"><i class="pt-swatch swatch-user"></i>用户态</span>
+              <span class="pt-leg-item"><i class="pt-swatch swatch-kernel"></i>内核态</span>
+            </div>
+          </div>
+
+          <div class="pt-table pt-thread-table">
+            <div class="pt-thread-thead" role="row">
+              <span>TID</span>
+              <span class="align-right">CPU (用户/内核)</span>
+              <span>入口地址 (Start Address)</span>
+              <span class="align-right pt-tcol-pri">优先级</span>
+              <span class="align-right pt-tcol-tot">累计</span>
+              <span class="align-right">状态</span>
+            </div>
+            <div id="pt-thread-list" class="pt-tbody" role="rowgroup">
+              <div class="pt-empty-state">等待线程快照...</div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
   </div>
 
   <script type="module" src="app.js"></script>

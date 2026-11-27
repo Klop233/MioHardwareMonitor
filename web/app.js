@@ -1,22 +1,37 @@
-import { CpuCoreGridChart, SparklineChart, buildMiniSparkSvg } from './gauges.js';
+import { RadialArcGauge, CpuCoreGridChart, SparklineChart, buildMiniSparkSvg } from './gauges.js';
 import { KlineChart } from './kline-chart.js';
 
-// ================= STATE (100% driven by Settings Window / AppController) =================
+// ================= STATE (Driven by AppController / Settings Window + Interactive Desktop Controls) =================
 const state = {
   settings: {
     theme: 'light',
-    layoutMode: 'split',
+    layoutMode: 'hardware',
     colorScheme: 'cn',
-    cpuViewMode: 'cores',
+    skin: 'miolab',
+    cssVariables: null,
+    hudStyle: 'instrument',
+    oledTrueBlack: false,
+    maskPublicIp: false,
+    pingTargetHost: '223.5.5.5',
+    alerts: null,
+    marketEnabled: false,
+    donationEnabled: false,
+    cpuViewMode: 'compact',
     cpuDisplayTarget: 'auto',
     processSortBy: 'cpu',
+    monitorPage: 'overview',
+    processTreeViewMode: 'tree',
+    processTreeSortBy: 'cpu',
+    processTreeAutoFollowTop: true,
+    processTreePinnedPid: 0,
+    processTreeFilter: '',
     customLayout: null,
     activeSymbolId: 'BTC',
     activeCategory: 'crypto',
     activeInterval: '15m',
     cryptoExchange: 'binance',
     cryptoMarketType: 'futures',
-    telemetryIntervalMs: 1000,
+    telemetryIntervalMs: 1500,
     showMA: true,
     showBoll: false,
     showVolume: true,
@@ -27,6 +42,7 @@ const state = {
     fxToCurrency: 'CNY'
   },
   isFullScreen: false,
+  isDirectExclusive: false,
   alwaysOnTop: true,
   lockWindowPosition: true,
   windowPositionPreset: 'custom',
@@ -37,12 +53,21 @@ const state = {
   fxRates: { USD: 1, CNY: 7.2, CNH: 7.2, EUR: 0.92, JPY: 155, HKD: 7.78, GBP: 0.78 },
   lastTelemetry: null,
   lastNetworkIp: null,
+  lastProcessTree: null,
   lastKline: null,
-  socketHistory: { usages: [], cores: [] }
+  lastMonitorPage: 'overview',
+  lastRenderedActivePid: 0,
+  socketHistory: { usages: [], cores: [] },
+  collapsedPids: new Set(),
+  pendingTerminatePid: 0,
+  pendingTerminateTimer: null,
+  filterDebounceTimer: null,
+  toastTimer: null
 };
 
 // ================= WIDGET DOM ANCHORS (FOR CUSTOM LAYOUT SWITCHING) =================
-const WIDGET_IDS = ['cpu', 'gpu', 'ram', 'network', 'disk', 'processes', 'kline', 'watchlist', 'fx'];
+const WIDGET_IDS = ['cpu', 'gpu', 'ram', 'network', 'disk', 'sensors', 'processes', 'kline', 'watchlist', 'fx'];
+const MARKET_WIDGET_IDS = new Set(['kline', 'watchlist', 'fx']);
 const widgetAnchors = new Map();
 for (const id of WIDGET_IDS) {
   const el = document.getElementById(`widget-${id}`);
@@ -67,48 +92,74 @@ function postHost(type, payload = {}) {
   }
 }
 
-// ================= CHARTS =================
+// ================= CHARTS & PRECISION INSTRUMENT GAUGES =================
+const cpuGauge = new RadialArcGauge(document.getElementById('gauge-cpu'), {
+  label: 'CPU',
+  warnAt: 75,
+  dangerAt: 90
+});
+
+const gpuGauge = new RadialArcGauge(document.getElementById('gauge-gpu'), {
+  label: 'GPU',
+  warnAt: 80,
+  dangerAt: 92
+});
+
+const ramGauge = new RadialArcGauge(document.getElementById('gauge-ram'), {
+  label: 'RAM',
+  warnAt: 80,
+  dangerAt: 90
+});
+
 const cpuCoreGrid = new CpuCoreGridChart(
   document.getElementById('cpu-cores-canvas'),
   updateCpuCoreHover,
-  60
+  60,
+  { mode: 'compact' }
 );
 
 const cpuSpark = new SparklineChart(
   document.getElementById('spark-cpu'),
-  [{ colorVar: '--accent', fillAlpha: 0.14 }],
+  [{ colorVar: '--accent', fillAlpha: 0.16 }],
   60,
-  100
+  100,
+  { formatTick: (v) => `${Math.round(v)}%`, unit: '%' }
 );
 
 const gpuSpark = new SparklineChart(
   document.getElementById('spark-gpu'),
-  [{ colorVar: '--accent', fillAlpha: 0.14 }],
+  [{ colorVar: '--accent', fillAlpha: 0.16 }],
   60,
-  100
+  100,
+  { formatTick: (v) => `${Math.round(v)}%`, unit: '%' }
 );
 
 const ramSpark = new SparklineChart(
   document.getElementById('spark-ram'),
-  [{ colorVar: '--accent', fillAlpha: 0.14 }],
+  [{ colorVar: '--accent', fillAlpha: 0.16 }],
   60,
-  100
+  100,
+  { formatTick: (v) => `${Math.round(v)}%`, unit: '%' }
 );
 
 const netSpark = new SparklineChart(
   document.getElementById('spark-net'),
   [
-    { colorVar: '--accent', fillAlpha: 0.14, dashed: false },
-    { colorVar: '--text-muted', fillAlpha: 0, dashed: true }
+    { colorVar: '--accent', fillAlpha: 0.16, dashed: false, label: '下行' },
+    { colorVar: '--text-muted', fillAlpha: 0, dashed: true, label: '上行' }
   ],
   60,
-  null
+  null,
+  { formatTick: formatSpeedCompact, showScale: true, showPeak: true }
 );
 
 const klineChart = new KlineChart(document.getElementById('kline-canvas'), updateKlineHud);
 
 function redrawAllCharts() {
   requestAnimationFrame(() => {
+    cpuGauge.draw();
+    gpuGauge.draw();
+    ramGauge.draw();
     cpuCoreGrid.draw();
     cpuSpark.draw();
     for (const p of multiCpuPanels) {
@@ -118,11 +169,11 @@ function redrawAllCharts() {
     gpuSpark.draw();
     ramSpark.draw();
     netSpark.draw();
-    klineChart.draw();
+    if (marketEnabled()) klineChart.draw();
   });
 }
 
-// ================= CLOCK (MioLab 03.04: YYYY.MM.DD HH:mm:ss) =================
+// ================= CLOCK (YYYY.MM.DD HH:mm:ss) =================
 function updateClock() {
   const now = new Date();
   const y = now.getFullYear();
@@ -131,7 +182,8 @@ function updateClock() {
   const hh = String(now.getHours()).padStart(2, '0');
   const mm = String(now.getMinutes()).padStart(2, '0');
   const ss = String(now.getSeconds()).padStart(2, '0');
-  document.getElementById('clock-datetime').textContent = `${y}.${mo}.${d} ${hh}:${mm}:${ss}`;
+  const el = document.getElementById('clock-datetime');
+  if (el) el.textContent = `${y}.${mo}.${d} ${hh}:${mm}:${ss}`;
 }
 updateClock();
 setInterval(updateClock, 1000);
@@ -141,6 +193,7 @@ let oledShiftStep = 0;
 const OLED_OFFSETS = [[0, 0], [1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1]];
 setInterval(() => {
   const root = document.getElementById('hud-root');
+  if (!root) return;
   if (state.settings.oledPixelShift) {
     oledShiftStep = (oledShiftStep + 1) % OLED_OFFSETS.length;
     const [ox, oy] = OLED_OFFSETS[oledShiftStep];
@@ -164,8 +217,10 @@ if (window.chrome && window.chrome.webview) {
         if (msg.data) {
           state.settings = { ...state.settings, ...msg.data };
           applyVisualSettings();
-          renderWatchlist();
-          updateFxReadout();
+          if (marketEnabled()) {
+            renderWatchlist();
+            updateFxReadout();
+          }
           if (state.lastTelemetry) {
             renderCpuSection(state.lastTelemetry, false);
             renderProcesses(state.lastTelemetry.topProcesses || []);
@@ -182,6 +237,13 @@ if (window.chrome && window.chrome.webview) {
       case 'networkIp':
         state.lastNetworkIp = msg.data;
         renderNetworkIp(msg.data);
+        break;
+      case 'proctree':
+        state.lastProcessTree = msg.data;
+        renderProcessTree(msg.data);
+        break;
+      case 'processActionResult':
+        handleProcessActionResult(msg.data);
         break;
       case 'quotes':
         handleQuotes(msg.data);
@@ -201,7 +263,7 @@ if (window.chrome && window.chrome.webview) {
           if (msg.data.activeSymbolId) state.settings.activeSymbolId = msg.data.activeSymbolId;
           if (msg.data.activeCategory) state.settings.activeCategory = msg.data.activeCategory;
           applyVisualSettings();
-          renderWatchlist();
+          if (marketEnabled()) renderWatchlist();
         }
         break;
     }
@@ -209,12 +271,15 @@ if (window.chrome && window.chrome.webview) {
 }
 
 function handleInit(data) {
+  if (!data) return;
   if (data.settings) {
     state.settings = { ...state.settings, ...data.settings };
   }
   state.symbols = data.symbols || [];
+
   handleWindowState({
     isFullScreen: data.isFullScreen,
+    isDirectExclusive: data.isDirectExclusive,
     alwaysOnTop: data.alwaysOnTop,
     lockWindowPosition: data.lockWindowPosition ?? state.settings.lockWindowPosition ?? true,
     windowPositionPreset: data.windowPositionPreset || state.settings.windowPositionPreset || 'custom',
@@ -222,37 +287,44 @@ function handleInit(data) {
     monitors: data.monitors || []
   });
 
+  // Batch-hydrate history with zero intermediate redraws
   if (Array.isArray(data.history) && data.history.length > 0) {
     cpuCoreGrid.hydrate(data.history);
     for (const pt of data.history) {
-      cpuSpark.push([pt.cpu || 0]);
-      gpuSpark.push([pt.gpu || 0]);
-      ramSpark.push([pt.ram || 0]);
-      netSpark.push([pt.netDn || 0, pt.netUp || 0]);
+      cpuSpark.push([pt.cpu || 0], false);
+      gpuSpark.push([pt.gpu || 0], false);
+      ramSpark.push([pt.ram || 0], false);
+      netSpark.push([pt.netDn || 0, pt.netUp || 0], false);
       recordSocketHistoryPoint(pt.socketUsages, pt.socketCores);
     }
   }
 
   applyVisualSettings();
-  renderWatchlist();
-  updateFxReadout();
+  if (marketEnabled()) {
+    renderWatchlist();
+    updateFxReadout();
+  }
 }
 
 function handleWindowState(data) {
+  if (!data) return;
   state.isFullScreen = !!data.isFullScreen;
+  if (data.isDirectExclusive !== undefined) state.isDirectExclusive = !!data.isDirectExclusive;
   state.alwaysOnTop = !!data.alwaysOnTop;
   if (data.lockWindowPosition !== undefined) state.lockWindowPosition = !!data.lockWindowPosition;
   if (data.windowPositionPreset) state.windowPositionPreset = data.windowPositionPreset;
   if (data.targetMonitorDevice) state.targetMonitorDevice = data.targetMonitorDevice;
   if (Array.isArray(data.monitors)) state.monitors = data.monitors;
 
-  document.documentElement.setAttribute('data-fullscreen', state.isFullScreen ? 'true' : 'false');
-  document.documentElement.setAttribute('data-window-locked', state.lockWindowPosition ? 'true' : 'false');
+  const root = document.documentElement;
+  root.setAttribute('data-fullscreen', state.isFullScreen ? 'true' : 'false');
+  root.setAttribute('data-window-locked', state.lockWindowPosition ? 'true' : 'false');
+  root.setAttribute('data-direct-exclusive', state.isDirectExclusive ? 'true' : 'false');
 
   const badge = document.getElementById('window-mode-badge');
   if (badge) {
     badge.className = 'status-pill';
-    if (data.isDirectExclusive) {
+    if (state.isDirectExclusive) {
       badge.textContent = '硬件独占';
       badge.classList.add('success');
     } else if (state.isFullScreen) {
@@ -268,6 +340,12 @@ function handleWindowState(data) {
   }
 
   applyTopBarVisibility();
+  if (state.lastTelemetry) {
+    renderCpuSection(state.lastTelemetry, false);
+  }
+  if (state.lastProcessTree) {
+    renderProcessTree(state.lastProcessTree);
+  }
   redrawAllCharts();
 }
 
@@ -278,7 +356,8 @@ function applyTopBarVisibility() {
 
 function applyLayoutDom() {
   const s = state.settings;
-  const isCustom = (s.layoutMode || 'split') === 'custom';
+  const isCustom = (s.layoutMode || 'hardware') === 'custom';
+  const marketOn = marketEnabled();
   const builtinMain = document.getElementById('builtin-main');
   const customGrid = document.getElementById('custom-grid');
   if (!builtinMain || !customGrid) return;
@@ -314,7 +393,8 @@ function applyLayoutDom() {
         customGrid.appendChild(el);
       }
 
-      if (w && w.visible) {
+      const gatedOff = !marketOn && MARKET_WIDGET_IDS.has(id);
+      if (!gatedOff && w && w.visible) {
         const colSpan = Math.max(1, Math.min(cols, Number(w.colSpan) || 1));
         const rowSpan = Math.max(1, Math.min(rows, Number(w.rowSpan) || 1));
         const col = Math.max(1, Math.min(cols - colSpan + 1, Number(w.col) || 1));
@@ -356,80 +436,210 @@ function applyLayoutDom() {
   }
 }
 
+function marketEnabled() {
+  return state.settings.marketEnabled === true;
+}
+
+function normalizeCpuViewMode(mode) {
+  const m = String(mode || 'compact').trim().toLowerCase();
+  if (m === 'cores' || m === 'overall') return m;
+  return 'compact';
+}
+
+function formatHistoryWindow() {
+  const intervalMs = Math.max(500, Math.min(5000, Number(state.settings.telemetryIntervalMs) || 1500));
+  const totalSec = Math.round((60 * intervalMs) / 1000);
+  if (totalSec >= 120 && totalSec % 60 === 0) return `${totalSec / 60} 分钟`;
+  if (totalSec >= 120) return `${(totalSec / 60).toFixed(1)} 分钟`;
+  return `${totalSec} 秒`;
+}
+
+/** Pushes the active skin palette (computed host-side from SkinCatalog) onto :root as CSS variables. */
+function applySkinVariables() {
+  const vars = state.settings.cssVariables;
+  const root = document.documentElement;
+  if (!vars || typeof vars !== 'object') return;
+  for (const [key, value] of Object.entries(vars)) {
+    if (key.startsWith('--') && typeof value === 'string') {
+      root.style.setProperty(key, value);
+    }
+  }
+  root.setAttribute('data-skin', state.settings.skin || 'miolab');
+}
+
 function applyVisualSettings() {
   const s = state.settings;
+  const root = document.documentElement;
   const theme = s.theme === 'dark' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.setAttribute('data-colors', s.colorScheme || 'cn');
-  document.documentElement.setAttribute('data-layout', s.layoutMode || 'split');
+  const hudStyle = s.hudStyle === 'flat' ? 'flat' : 'instrument';
+  const oledBlack = !!(s.oledTrueBlack && theme === 'dark');
+  const marketOn = marketEnabled();
+  const monitorPage = String(s.monitorPage || 'overview').toLowerCase() === 'proctree' ? 'proctree' : 'overview';
+  const enteredProcTree = monitorPage === 'proctree' && state.lastMonitorPage !== 'proctree';
+  state.lastMonitorPage = monitorPage;
+  const cpuView = normalizeCpuViewMode(s.cpuViewMode);
+
+  let layoutMode = s.layoutMode || 'hardware';
+  if (!marketOn && (layoutMode === 'market' || layoutMode === 'split')) layoutMode = 'hardware';
+
+  root.setAttribute('data-theme', theme);
+  root.setAttribute('data-colors', s.colorScheme || 'cn');
+  root.setAttribute('data-layout', layoutMode);
+  root.setAttribute('data-market', marketOn ? 'on' : 'off');
+  root.setAttribute('data-style', hudStyle);
+  root.setAttribute('data-hud-style', hudStyle);
+  root.setAttribute('data-oled-black', oledBlack ? 'true' : 'false');
+  root.setAttribute('data-page', monitorPage);
+  root.setAttribute('data-cpu-view', cpuView);
+
+  applySkinVariables();
   applyTopBarVisibility();
   applyLayoutDom();
 
-  document.getElementById('compact-hw-strip').classList.toggle('hidden', s.layoutMode !== 'market');
-  document.getElementById('compact-market-strip').classList.toggle('hidden', s.layoutMode !== 'hardware');
+  // Top bar page tabs & direct display page pill
+  const tabOverview = document.getElementById('tab-page-overview');
+  const tabProctree = document.getElementById('tab-page-proctree');
+  if (tabOverview) tabOverview.classList.toggle('active', monitorPage === 'overview');
+  if (tabProctree) tabProctree.classList.toggle('active', monitorPage === 'proctree');
+  const directPagePill = document.getElementById('direct-page-pill');
+  if (directPagePill) {
+    directPagePill.textContent = monitorPage === 'proctree' ? '进程与线程树' : '硬件总览';
+  }
 
-  // CPU view mode (driven by Settings Window)
-  const showCores = (s.cpuViewMode || 'cores') !== 'overall';
-  document.getElementById('cpu-cores-wrap').classList.toggle('hidden', !showCores);
-  document.getElementById('cpu-overall-wrap').classList.toggle('hidden', showCores);
-  document.getElementById('cpu-core-hover').classList.toggle('hidden', !showCores);
-  document.getElementById('cpu-view-pill').textContent = showCores ? '逻辑处理器' : '总体曲线';
+  document.getElementById('compact-hw-strip')?.classList.toggle('hidden', layoutMode !== 'market');
+  document.getElementById('compact-market-strip')?.classList.toggle('hidden', !marketOn || layoutMode !== 'hardware');
+
+  // CPU view mode: compact (default) | cores | overall
+  const showCores = cpuView !== 'overall';
+  cpuCoreGrid.setMode(cpuView === 'cores' ? 'cores' : 'compact');
+  document.getElementById('cpu-cores-wrap')?.classList.toggle('hidden', !showCores);
+  document.getElementById('cpu-overall-wrap')?.classList.toggle('hidden', showCores);
+  document.getElementById('cpu-core-hover')?.classList.toggle('hidden', !showCores);
+
+  const viewPill = document.getElementById('cpu-view-pill');
+  if (viewPill) {
+    viewPill.textContent = cpuView === 'overall' ? '总体曲线' : (cpuView === 'cores' ? '逻辑处理器' : '紧凑核心格');
+  }
+
   for (const p of multiCpuPanels) {
+    p.coreChart.setMode(cpuView === 'cores' ? 'cores' : 'compact');
     p.coresWrap.classList.toggle('hidden', !showCores);
     p.overallWrap.classList.toggle('hidden', showCores);
     p.hoverEl.classList.toggle('hidden', !showCores);
   }
-  const nCores = state.lastTelemetry?.cpu?.coreUsages?.length || 0;
-  document.getElementById('cpu-graph-caption').textContent = showCores
-    ? (nCores > 0 ? `逻辑处理器（共 ${nCores} 个 · 60 秒实时曲线）` : '所有逻辑处理器（60 秒实时曲线）')
-    : '总体利用率（60 秒实时曲线）';
 
-  // Process sort readout (driven by Settings Window)
+  updateCpuGraphCaption(state.lastTelemetry?.cpu?.coreUsages?.length || 0);
+
+  // Process sort readout (overview card)
   const sortByMem = (s.processSortBy || 'cpu') === 'mem';
-  document.getElementById('proc-sort-pill').textContent = sortByMem ? '按内存排序' : '按 CPU 排序';
-  document.getElementById('col-hdr-cpu').textContent = sortByMem ? 'CPU 占用' : 'CPU 占用 ↓';
-  document.getElementById('col-hdr-mem').textContent = sortByMem ? '内存占用 ↓' : '内存占用';
-  document.getElementById('col-hdr-cpu').classList.toggle('col-sorted', !sortByMem);
-  document.getElementById('col-hdr-mem').classList.toggle('col-sorted', sortByMem);
+  const procSortPill = document.getElementById('proc-sort-pill');
+  if (procSortPill) procSortPill.textContent = sortByMem ? '按内存排序' : '按 CPU 排序';
+  const colCpu = document.getElementById('col-hdr-cpu');
+  const colMem = document.getElementById('col-hdr-mem');
+  if (colCpu) {
+    colCpu.textContent = sortByMem ? 'CPU 占用' : 'CPU 占用 ↓';
+    colCpu.classList.toggle('col-sorted', !sortByMem);
+  }
+  if (colMem) {
+    colMem.textContent = sortByMem ? '内存占用 ↓' : '内存占用';
+    colMem.classList.toggle('col-sorted', sortByMem);
+  }
 
-  // K-Line read-only interval & indicator badges
+  // Sync Process Tree toolbar state from host settings
+  syncProcessTreeControlsFromSettings();
+
+  if (enteredProcTree) {
+    state.lastRenderedActivePid = 0;
+    requestAnimationFrame(() => {
+      const tbody = document.getElementById('pt-process-list');
+      const activeRow = tbody?.querySelector('.pt-row.active');
+      if (tbody && tbody.offsetParent !== null && activeRow) {
+        activeRow.scrollIntoView({ block: 'nearest' });
+        state.lastRenderedActivePid = Number(state.lastProcessTree?.activePid) || 0;
+      }
+    });
+  }
+
+  // Re-render IP display so maskPublicIp toggles take effect immediately
+  if (state.lastNetworkIp) {
+    renderNetworkIp(state.lastNetworkIp);
+  }
+
+  // K-Line read-only badges
   const ivLabel = (s.activeInterval || '15m').toUpperCase();
-  document.getElementById('kl-interval-pill').textContent = ivLabel === '1M' || ivLabel === '5M' || ivLabel === '15M'
-    ? ivLabel.toLowerCase()
-    : ivLabel;
+  const klIv = document.getElementById('kl-interval-pill');
+  if (klIv) {
+    klIv.textContent = ivLabel === '1M' || ivLabel === '5M' || ivLabel === '15M' ? ivLabel.toLowerCase() : ivLabel;
+  }
 
   const activeInds = [];
   if (s.showMA) activeInds.push('MA');
   if (s.showBoll) activeInds.push('BOLL');
   if (s.showVolume) activeInds.push('VOL');
-  document.getElementById('kl-indicators-pill').textContent = activeInds.length > 0 ? activeInds.join(' · ') : '纯 K 线';
+  const klInd = document.getElementById('kl-indicators-pill');
+  if (klInd) klInd.textContent = activeInds.length > 0 ? activeInds.join(' · ') : '纯 K 线';
 
-  // Watchlist read-only category & exchange header
   const catNames = { crypto: '虚拟货币', cn: 'A 股', us: '美股', fx: '外汇 / 黄金', all: '全部行情' };
-  document.getElementById('watchlist-cat-title').textContent = catNames[s.activeCategory] || '全部行情';
+  const wlTitle = document.getElementById('watchlist-cat-title');
+  if (wlTitle) wlTitle.textContent = catNames[s.activeCategory] || '全部行情';
 
   const exPill = document.getElementById('watchlist-exchange-pill');
-  const activeSym = state.symbols.find((x) => x.id === s.activeSymbolId);
-  const showCryptoPill = s.activeCategory === 'crypto' || s.activeCategory === 'all' || activeSym?.category === 'crypto';
-  if (showCryptoPill) {
-    const exMap = { binance: 'Binance', okx: 'OKX', bybit: 'Bybit', bitget: 'Bitget', gate: 'Gate.io' };
-    const exName = exMap[s.cryptoExchange] || 'Binance';
-    const mtName = (s.cryptoMarketType || 'futures') === 'futures' ? '永续' : '现货';
-    exPill.textContent = `${exName} · ${mtName}`;
-    exPill.classList.remove('hidden');
-  } else {
-    exPill.classList.add('hidden');
+  if (exPill) {
+    const activeSym = state.symbols.find((x) => x.id === s.activeSymbolId);
+    const showCryptoPill = s.activeCategory === 'crypto' || s.activeCategory === 'all' || activeSym?.category === 'crypto';
+    if (showCryptoPill) {
+      const exMap = { binance: 'Binance', okx: 'OKX', bybit: 'Bybit', bitget: 'Bitget', gate: 'Gate.io' };
+      const exName = exMap[s.cryptoExchange] || 'Binance';
+      const mtName = (s.cryptoMarketType || 'futures') === 'futures' ? '永续' : '现货';
+      exPill.textContent = `${exName} · ${mtName}`;
+      exPill.classList.remove('hidden');
+    } else {
+      exPill.classList.add('hidden');
+    }
   }
 
   klineChart.setOptions({ showMA: !!s.showMA, showBoll: !!s.showBoll, showVolume: !!s.showVolume });
   redrawAllCharts();
 }
 
+function updateCpuGraphCaption(coreCount) {
+  const el = document.getElementById('cpu-graph-caption');
+  if (!el) return;
+  const cpuView = normalizeCpuViewMode(state.settings.cpuViewMode);
+  const winStr = formatHistoryWindow();
+  if (cpuView === 'overall') {
+    el.textContent = `总体利用率（${winStr}实时曲线）`;
+  } else if (cpuView === 'cores') {
+    el.textContent = coreCount > 0
+      ? `逻辑处理器（共 ${coreCount} 线程 · ${winStr}曲线）`
+      : `所有逻辑处理器（${winStr}实时曲线）`;
+  } else {
+    el.textContent = coreCount > 0
+      ? `逻辑处理器（共 ${coreCount} 线程 · 紧凑视图 · ${winStr}）`
+      : `逻辑处理器（紧凑核心格 · ${winStr}）`;
+  }
+}
+
 // ================= RENDER TELEMETRY =================
 function renderTelemetry(t) {
   if (!t) return;
 
-  document.getElementById('uptime-badge').textContent = formatUptime(t.uptimeSeconds);
+  const uptimeEl = document.getElementById('uptime-badge');
+  if (uptimeEl) uptimeEl.textContent = formatUptime(t.uptimeSeconds);
+
+  // ---- CSV Recording Topbar Pill ----
+  const recPill = document.getElementById('rec-topbar-pill');
+  if (recPill) {
+    if (t.isRecording) {
+      recPill.textContent = `● REC ${formatDurationMmSs(t.recordingDurationSeconds || 0)}`;
+      recPill.classList.remove('hidden');
+    } else {
+      recPill.classList.add('hidden');
+    }
+  }
+
+  // ---- Thermal & Load Alerts ----
+  renderAlerts(t.alerts);
 
   // ---- CPU (Single & Multi-CPU Support) ----
   const cpu = t.cpu || {};
@@ -443,16 +653,33 @@ function renderTelemetry(t) {
   document.getElementById('gpu-pct').textContent = `${Math.round(gpuUsage)}%`;
   document.getElementById('gpu-clock').textContent = gpu.coreClockMhz ? `${Math.round(gpu.coreClockMhz)} MHz` : '—';
 
-  const gTemp = gpu.temperatureC != null ? `${Math.round(gpu.temperatureC)} °C` : '—';
-  const gHot = gpu.hotspotTempC != null ? `${Math.round(gpu.hotspotTempC)} °C` : '—';
-  document.getElementById('gpu-temp').textContent = `${gTemp} / ${gHot}`;
+  const gpuSubText = gpu.temperatureC != null
+    ? `${Math.round(gpu.temperatureC)} °C`
+    : (gpu.coreClockMhz ? `${Math.round(gpu.coreClockMhz)}M` : '—');
+  gpuGauge.setValue(gpuUsage, { subText: gpuSubText });
+
+  const gTemp = gpu.temperatureC != null ? `${Math.round(gpu.temperatureC)}°C` : '—';
+  const gHot = gpu.hotspotTempC != null ? `${Math.round(gpu.hotspotTempC)}°C` : '—';
+  const gpuTempLabel = document.getElementById('gpu-temp-label');
+  if (gpu.memoryTempC != null) {
+    if (gpuTempLabel) gpuTempLabel.textContent = '核心/热点/显存';
+    document.getElementById('gpu-temp').textContent = `${gTemp} / ${gHot} / ${Math.round(gpu.memoryTempC)}°C`;
+  } else {
+    if (gpuTempLabel) gpuTempLabel.textContent = '温度 / 热点';
+    document.getElementById('gpu-temp').textContent = `${gTemp} / ${gHot}`;
+  }
 
   const gPwr = gpu.powerWatts != null ? `${Math.round(gpu.powerWatts)} W` : '—';
   const gFan = gpu.fanRpm != null
     ? `${Math.round(gpu.fanRpm)} RPM`
     : (gpu.fanPercent != null ? `${Math.round(gpu.fanPercent)}%` : '—');
   document.getElementById('gpu-power-fan').textContent = `${gPwr} / ${gFan}`;
-  document.getElementById('gpu-mem-clk').textContent = gpu.memoryClockMhz ? `${Math.round(gpu.memoryClockMhz)} MHz` : '—';
+
+  const gCoreClk = gpu.coreClockMhz ? `${Math.round(gpu.coreClockMhz)}` : '—';
+  const gMemClk = gpu.memoryClockMhz ? `${Math.round(gpu.memoryClockMhz)}` : '—';
+  document.getElementById('gpu-mem-clk').textContent = (gpu.coreClockMhz || gpu.memoryClockMhz)
+    ? `${gCoreClk} / ${gMemClk} MHz`
+    : '—';
 
   const gpuHealth = document.getElementById('gpu-health-pill');
   gpuHealth.className = 'status-pill';
@@ -492,6 +719,22 @@ function renderTelemetry(t) {
   document.getElementById('ram-used-only').textContent = `${(mem.usedGb || 0).toFixed(1)} GB`;
   document.getElementById('ram-avail').textContent = `${(mem.availableGb || 0).toFixed(1)} GB`;
   document.getElementById('ram-total-only').textContent = `${(mem.totalGb || 0).toFixed(1)} GB`;
+  ramGauge.setValue(mem.usagePercent || 0, { subText: `${(mem.usedGb || 0).toFixed(1)} GB` });
+
+  const commitDt = document.getElementById('ram-commit-dt');
+  const commitDd = document.getElementById('ram-commit');
+  if (commitDt && commitDd) {
+    if (mem.committedGb && mem.committedGb > 0.05) {
+      commitDt.classList.remove('hidden');
+      commitDd.classList.remove('hidden');
+      commitDd.textContent = mem.commitLimitGb && mem.commitLimitGb > 0
+        ? `${mem.committedGb.toFixed(1)} / ${mem.commitLimitGb.toFixed(0)} GB`
+        : `${mem.committedGb.toFixed(1)} GB`;
+    } else {
+      commitDt.classList.add('hidden');
+      commitDd.classList.add('hidden');
+    }
+  }
 
   const ramBar = document.getElementById('ram-bar');
   ramBar.style.width = `${Math.min(100, memPct)}%`;
@@ -519,6 +762,9 @@ function renderTelemetry(t) {
   }
   ramSpark.push([mem.usagePercent || 0]);
 
+  // ---- Session Min / Avg / Max Stats ----
+  renderSessionStats(t.sessionStats);
+
   // ---- Network ----
   const net = t.network || {};
   document.getElementById('net-adapter').textContent = net.adapterName || '网络接口';
@@ -526,6 +772,7 @@ function renderTelemetry(t) {
   document.getElementById('net-up').textContent = formatSpeed(net.uploadBytesPerSec || 0);
   document.getElementById('net-session').textContent =
     `↓ ${formatMb(net.totalDownloadedMb || 0)} / ↑ ${formatMb(net.totalUploadedMb || 0)}`;
+  renderNetworkLatency(net.latency);
   netSpark.push([net.downloadBytesPerSec || 0, net.uploadBytesPerSec || 0]);
 
   // ---- Disk ----
@@ -534,15 +781,20 @@ function renderTelemetry(t) {
   document.getElementById('disk-write').textContent = formatSpeed(disk.writeBytesPerSec || 0);
   renderDrives(disk.drives || []);
 
+  // ---- Cooling & System Sensors ----
+  renderSensors(t.sensors, !!t.isElevated);
+
   // ---- Top Processes ----
   renderProcesses(t.topProcesses || []);
 
   // ---- Compact Hardware Strip ----
   const stripCpuEl = document.getElementById('strip-cpu');
-  if (Array.isArray(t.cpus) && t.cpus.length > 1) {
-    stripCpuEl.textContent = t.cpus.map((c) => `CPU${c.index + 1} ${Math.round(c.totalUsagePercent || 0)}%`).join(' / ');
-  } else {
-    stripCpuEl.textContent = `${Math.round(cpuUsage)}% · ${(cpu.currentClockGhz || 0).toFixed(1)} GHz`;
+  if (stripCpuEl) {
+    if (Array.isArray(t.cpus) && t.cpus.length > 1) {
+      stripCpuEl.textContent = t.cpus.map((c) => `CPU${c.index + 1} ${Math.round(c.totalUsagePercent || 0)}%`).join(' / ');
+    } else {
+      stripCpuEl.textContent = `${Math.round(cpuUsage)}% · ${(cpu.currentClockGhz || 0).toFixed(1)} GHz`;
+    }
   }
   const gpuTempStr = gpu.temperatureC != null ? ` · ${Math.round(gpu.temperatureC)} °C` : '';
   document.getElementById('strip-gpu').textContent = `${Math.round(gpuUsage)}%${gpuTempStr}`;
@@ -550,6 +802,225 @@ function renderTelemetry(t) {
   document.getElementById('strip-ram').textContent = `${memPct}% (${(mem.usedGb || 0).toFixed(1)} GB)`;
   document.getElementById('strip-net-dn').textContent = formatSpeed(net.downloadBytesPerSec || 0);
   document.getElementById('strip-net-up').textContent = formatSpeed(net.uploadBytesPerSec || 0);
+}
+
+function renderSessionStats(ss) {
+  const cpuEl = document.getElementById('cpu-session-stats');
+  const gpuEl = document.getElementById('gpu-session-stats');
+  const ramEl = document.getElementById('ram-session-stats');
+  const valid = ss && ss.sampleCount >= 2;
+
+  if (cpuEl) {
+    if (!valid || ss.cpuUsage?.max == null) {
+      cpuEl.classList.add('hidden');
+    } else {
+      const segs = [`占用 均 ${Math.round(ss.cpuUsage.avg ?? 0)}% · 峰 ${Math.round(ss.cpuUsage.max)}%`];
+      if (ss.cpuTemp?.max != null) segs.push(`温度 均 ${Math.round(ss.cpuTemp.avg ?? 0)}°C · 峰 ${Math.round(ss.cpuTemp.max)}°C`);
+      if (ss.cpuPower?.max != null) segs.push(`功耗 峰 ${Math.round(ss.cpuPower.max)}W`);
+      cpuEl.textContent = `本次统计：${segs.join(' | ')}`;
+      cpuEl.classList.remove('hidden');
+    }
+  }
+
+  if (gpuEl) {
+    if (!valid || ss.gpuUsage?.max == null) {
+      gpuEl.classList.add('hidden');
+    } else {
+      const segs = [`占用 均 ${Math.round(ss.gpuUsage.avg ?? 0)}% · 峰 ${Math.round(ss.gpuUsage.max)}%`];
+      if (ss.gpuTemp?.max != null) segs.push(`温度 峰 ${Math.round(ss.gpuTemp.max)}°C`);
+      if (ss.gpuPower?.max != null) segs.push(`功耗 峰 ${Math.round(ss.gpuPower.max)}W`);
+      gpuEl.textContent = `本次：${segs.join(' | ')}`;
+      gpuEl.classList.remove('hidden');
+    }
+  }
+
+  if (ramEl) {
+    if (!valid || ss.ramUsage?.max == null) {
+      ramEl.classList.add('hidden');
+    } else {
+      ramEl.textContent = `本次：低 ${Math.round(ss.ramUsage.min ?? 0)}% · 均 ${Math.round(ss.ramUsage.avg ?? 0)}% · 峰 ${Math.round(ss.ramUsage.max)}%`;
+      ramEl.classList.remove('hidden');
+    }
+  }
+}
+
+function renderNetworkLatency(lat) {
+  const pill = document.getElementById('net-ping-pill');
+  if (!pill) return;
+  if (!lat || !lat.target) {
+    pill.classList.add('hidden');
+    return;
+  }
+
+  pill.className = 'status-pill mono';
+  if (lat.ok && lat.pingMs != null && Number.isFinite(lat.pingMs)) {
+    const ms = Math.round(lat.pingMs);
+    pill.textContent = `${ms} ms`;
+    if (ms < 50) pill.classList.add('success');
+    else if (ms < 110) pill.classList.add('warning');
+    else pill.classList.add('danger');
+
+    const jitterPart = lat.jitterMs != null ? ` · 抖动 ${lat.jitterMs.toFixed(1)} ms` : '';
+    const lossPart = ` · 丢包 ${Math.round(lat.packetLossPercent || 0)}%`;
+    pill.title = `延迟目标：${lat.target} · Ping ${lat.pingMs.toFixed(1)} ms${jitterPart}${lossPart}`;
+  } else {
+    pill.textContent = '超时';
+    pill.classList.add('danger');
+    pill.title = `延迟目标：${lat.target} · 探测超时（丢包 ${Math.round(lat.packetLossPercent || 0)}%）`;
+  }
+  pill.classList.remove('hidden');
+}
+
+function renderAlerts(alerts) {
+  const list = Array.isArray(alerts) ? alerts : [];
+  for (const id of WIDGET_IDS) {
+    const el = document.getElementById(`widget-${id}`);
+    if (el) el.classList.remove('card-alert-warning', 'card-alert-danger');
+  }
+
+  const byWidget = new Map();
+  let hasDanger = false;
+  for (const a of list) {
+    if (!a) continue;
+    const sev = a.severity === 'danger' ? 'danger' : 'warning';
+    if (sev === 'danger') hasDanger = true;
+    const wid = String(a.widgetId || '').toLowerCase();
+    if (wid) {
+      const prev = byWidget.get(wid);
+      if (prev !== 'danger') byWidget.set(wid, sev);
+    }
+  }
+
+  for (const [wid, sev] of byWidget.entries()) {
+    const el = document.getElementById(`widget-${wid}`);
+    if (el) el.classList.add(sev === 'danger' ? 'card-alert-danger' : 'card-alert-warning');
+  }
+
+  const pill = document.getElementById('alert-topbar-pill');
+  if (!pill) return;
+  if (list.length === 0) {
+    pill.classList.add('hidden');
+    pill.textContent = '';
+    pill.title = '';
+    return;
+  }
+
+  const lead = list.find((x) => x.severity === 'danger') || list[0];
+  pill.className = `status-pill ${hasDanger ? 'danger' : 'warning'}`;
+  pill.textContent = list.length === 1 ? `⚠ ${lead.title}` : `⚠ ${list.length} 项告警 · ${lead.title}`;
+  pill.title = list.map((x) => x.message || x.title).join('\n');
+  pill.classList.remove('hidden');
+}
+
+function renderSensors(sensors, isElevated) {
+  const s = sensors || {};
+  const moboNameEl = document.getElementById('sensors-mobo-name');
+  if (moboNameEl) moboNameEl.textContent = s.motherboardName || '系统传感器';
+
+  const pwrPill = document.getElementById('sensors-power-pill');
+  if (pwrPill) {
+    if (s.estimatedSystemPowerWatts != null && s.estimatedSystemPowerWatts > 0) {
+      pwrPill.textContent = `整机 ~${Math.round(s.estimatedSystemPowerWatts)} W`;
+      pwrPill.classList.remove('hidden');
+    } else {
+      pwrPill.classList.add('hidden');
+    }
+  }
+
+  const fans = Array.isArray(s.fans) ? s.fans : [];
+  const moboTemps = Array.isArray(s.motherboardTemps) ? s.motherboardTemps : [];
+  const storageTemps = Array.isArray(s.storageTemps) ? s.storageTemps : [];
+  const bat = s.battery || null;
+
+  const hasAnyOther = moboTemps.length > 0 || storageTemps.length > 0 || bat != null;
+
+  // Fans
+  const fansSec = document.getElementById('sensors-fans-sec');
+  const fansList = document.getElementById('sensors-fans-list');
+  if (fansSec && fansList) {
+    if (fans.length > 0) {
+      fansSec.classList.remove('hidden');
+      fansList.innerHTML = fans.slice(0, 6).map((f) => {
+        const pctStr = f.percent != null ? ` (${Math.round(f.percent)}%)` : '';
+        return `<div class="sensor-row">
+          <span class="sensor-label" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+          <span class="sensor-val mono">${Math.round(f.rpm || 0)} RPM${pctStr}</span>
+        </div>`;
+      }).join('');
+    } else {
+      fansSec.classList.remove('hidden');
+      fansList.innerHTML = `<div class="sensor-row"><span class="sensor-label">${isElevated ? '未检测到转速信号' : '管理员权限可读取主板风扇'}</span><span class="sensor-val mono">—</span></div>`;
+    }
+  }
+
+  // Motherboard / VRM Temps
+  const moboSec = document.getElementById('sensors-mobo-sec');
+  const moboList = document.getElementById('sensors-mobo-list');
+  if (moboSec && moboList) {
+    if (moboTemps.length > 0) {
+      moboSec.classList.remove('hidden');
+      moboList.innerHTML = moboTemps.slice(0, 6).map((m) => {
+        const cls = m.tempC >= 85 ? 'val-danger' : (m.tempC >= 70 ? 'val-warn' : '');
+        return `<div class="sensor-row">
+          <span class="sensor-label" title="${escapeHtml(m.name)}">${escapeHtml(m.name)}</span>
+          <span class="sensor-val mono ${cls}">${Math.round(m.tempC)} °C</span>
+        </div>`;
+      }).join('');
+    } else {
+      moboSec.classList.toggle('hidden', hasAnyOther);
+      if (!hasAnyOther) {
+        moboList.innerHTML = `<div class="sensor-row"><span class="sensor-label">${isElevated ? '无主板温度传感器' : '需管理员权限'}</span><span class="sensor-val mono">—</span></div>`;
+      }
+    }
+  }
+
+  // Storage Temps / Health
+  const stoSec = document.getElementById('sensors-storage-sec');
+  const stoList = document.getElementById('sensors-storage-list');
+  if (stoSec && stoList) {
+    if (storageTemps.length > 0) {
+      stoSec.classList.remove('hidden');
+      stoList.innerHTML = storageTemps.slice(0, 6).map((d) => {
+        const tVal = d.tempC != null ? `${Math.round(d.tempC)}°C` : '—';
+        const lifeVal = d.lifeRemainingPercent != null ? ` · ${Math.round(d.lifeRemainingPercent)}%` : '';
+        const cls = d.tempC != null && d.tempC >= 62 ? 'val-danger' : (d.tempC != null && d.tempC >= 52 ? 'val-warn' : '');
+        return `<div class="sensor-row">
+          <span class="sensor-label" title="${escapeHtml(d.name)}">${escapeHtml(d.name)}</span>
+          <span class="sensor-val mono ${cls}">${tVal}${lifeVal}</span>
+        </div>`;
+      }).join('');
+    } else {
+      stoSec.classList.add('hidden');
+    }
+  }
+
+  // Battery (only on laptops / UPS)
+  const batSec = document.getElementById('sensors-battery-sec');
+  const batBody = document.getElementById('sensors-battery-body');
+  if (batSec && batBody) {
+    if (bat) {
+      batSec.classList.remove('hidden');
+      const statusText = bat.isCharging ? '充电中' : (bat.onAcPower ? '外接电源' : '电池供电');
+      const chargeCls = bat.chargePercent <= 15 ? 'val-danger' : (bat.chargePercent <= 30 ? 'val-warn' : 'val-success');
+      const rows = [
+        `<div class="sensor-row"><span class="sensor-label">电量状态</span><span class="sensor-val mono ${chargeCls}">${Math.round(bat.chargePercent)}% · ${statusText}</span></div>`
+      ];
+      if (bat.powerWatts != null) {
+        rows.push(`<div class="sensor-row"><span class="sensor-label">充放电功率</span><span class="sensor-val mono">${bat.powerWatts.toFixed(1)} W</span></div>`);
+      }
+      if (bat.remainingMinutes != null && bat.remainingMinutes > 0) {
+        const hh = Math.floor(bat.remainingMinutes / 60);
+        const mm = bat.remainingMinutes % 60;
+        rows.push(`<div class="sensor-row"><span class="sensor-label">预计续航</span><span class="sensor-val mono">${hh > 0 ? `${hh}h ${mm}m` : `${mm}m`}</span></div>`);
+      }
+      if (bat.wearPercent != null) {
+        rows.push(`<div class="sensor-row"><span class="sensor-label">损耗度</span><span class="sensor-val mono">${bat.wearPercent.toFixed(1)}%</span></div>`);
+      }
+      batBody.innerHTML = rows.join('');
+    } else {
+      batSec.classList.add('hidden');
+    }
+  }
 }
 
 function recordSocketHistoryPoint(socketUsages, socketCores) {
@@ -605,7 +1076,8 @@ function ensureMultiCpuPanels(count) {
   multiCpuPanels = [];
   container.innerHTML = '';
 
-  const showCores = (state.settings.cpuViewMode || 'cores') !== 'overall';
+  const cpuView = normalizeCpuViewMode(state.settings.cpuViewMode);
+  const showCores = cpuView !== 'overall';
   for (let i = 0; i < count; i++) {
     const box = document.createElement('div');
     box.className = 'cpu-socket-box';
@@ -649,23 +1121,21 @@ function ensureMultiCpuPanels(count) {
       } else {
         hoverEl.textContent = `CPU${sockIndex + 1} #${info.index} · ${Math.round(info.current)}% (峰 ${Math.round(info.peak)}%)`;
       }
-    }, 60);
+    }, 60, { mode: cpuView === 'cores' ? 'cores' : 'compact' });
 
     const overallChart = new SparklineChart(
       overallCanvas,
-      [{ colorVar: '--accent', fillAlpha: 0.14 }],
+      [{ colorVar: '--accent', fillAlpha: 0.16 }],
       60,
-      100
+      100,
+      { formatTick: (v) => `${Math.round(v)}%`, unit: '%' }
     );
 
-    // Hydrate from buffered socket history
     if (Array.isArray(state.socketHistory.cores[i])) {
       coreChart.hydrateCoreArrays(state.socketHistory.cores[i]);
     }
     if (Array.isArray(state.socketHistory.usages[i])) {
-      for (const u of state.socketHistory.usages[i]) {
-        overallChart.push([u]);
-      }
+      overallChart.hydrate(state.socketHistory.usages[i].map((u) => [u]));
     }
 
     multiCpuPanels.push({
@@ -724,7 +1194,8 @@ function renderCpuSection(t, pushSample = true) {
   const nameEl = document.getElementById('cpu-name');
   const socketPill = document.getElementById('cpu-socket-pill');
   const healthEl = document.getElementById('cpu-health-pill');
-  const showCores = (state.settings.cpuViewMode || 'cores') !== 'overall';
+  const cpuView = normalizeCpuViewMode(state.settings.cpuViewMode);
+  const showCores = cpuView !== 'overall';
 
   if (showSplitMulti) {
     singleBody.classList.add('hidden');
@@ -785,7 +1256,7 @@ function renderCpuSection(t, pushSample = true) {
         cpuCoreGrid.hydrateCoreArrays(state.socketHistory.cores[i]);
       }
       if (Array.isArray(state.socketHistory.usages[i])) {
-        for (const u of state.socketHistory.usages[i]) cpuSpark.push([u]);
+        cpuSpark.hydrate(state.socketHistory.usages[i].map((u) => [u]));
       }
     }
   }
@@ -807,9 +1278,28 @@ function renderCpuSection(t, pushSample = true) {
   document.getElementById('cpu-cores').textContent =
     `${viewCpu.physicalCores || 0} 核 / ${viewCpu.logicalProcessors || 0} 线程`;
 
-  const tempStr = viewCpu.temperatureC != null ? `${Math.round(viewCpu.temperatureC)} °C` : '—';
-  const powerStr = viewCpu.powerWatts != null ? `${Math.round(viewCpu.powerWatts)} W` : '—';
-  document.getElementById('cpu-temp-power').textContent = `${tempStr} / ${powerStr}`;
+  cpuGauge.setValue(usage, {
+    subText: `${(viewCpu.currentClockGhz || 0).toFixed(2)} GHz`
+  });
+
+  // Non-Admin Temp Hint handling
+  const tempEl = document.getElementById('cpu-temp-power');
+  const elevBtn = document.getElementById('cpu-elevate-btn');
+  const elevHint = document.getElementById('cpu-elevate-hint');
+  const needsAdminForTemp = t.isElevated === false && viewCpu.temperatureC == null;
+
+  if (needsAdminForTemp) {
+    tempEl.textContent = viewCpu.powerWatts != null ? `— / ${Math.round(viewCpu.powerWatts)} W` : '未提权';
+    if (elevBtn) elevBtn.classList.toggle('hidden', state.isDirectExclusive);
+    if (elevHint) elevHint.classList.toggle('hidden', !state.isDirectExclusive);
+  } else {
+    const tempStr = viewCpu.temperatureC != null ? `${Math.round(viewCpu.temperatureC)} °C` : '—';
+    const powerStr = viewCpu.powerWatts != null ? `${Math.round(viewCpu.powerWatts)} W` : '—';
+    tempEl.textContent = `${tempStr} / ${powerStr}`;
+    if (elevBtn) elevBtn.classList.add('hidden');
+    if (elevHint) elevHint.classList.add('hidden');
+  }
+
   applyCpuHealthPill(healthEl, usage, viewCpu.temperatureC ?? null);
 
   if (pushSample) {
@@ -823,10 +1313,7 @@ function renderCpuSection(t, pushSample = true) {
   }
 
   const coreCount = Array.isArray(viewCpu.coreUsages) ? viewCpu.coreUsages.length : 0;
-  if (showCores && coreCount > 0) {
-    document.getElementById('cpu-graph-caption').textContent =
-      `逻辑处理器（共 ${coreCount} 个 · 60 秒实时曲线）`;
-  }
+  updateCpuGraphCaption(coreCount);
 }
 
 function updateCpuCoreHover(info) {
@@ -836,20 +1323,61 @@ function updateCpuCoreHover(info) {
     el.textContent = '悬停核心查看单核读数';
     return;
   }
-  el.textContent = `核心 #${info.index} · 当前 ${Math.round(info.current)}% · 峰值 ${Math.round(info.peak)}% · 均值 ${Math.round(info.avg)}%`;
+  el.textContent = `核心 #${info.index} · 当前 ${Math.round(info.current)}% · 均值 ${Math.round(info.avg)}% · 峰值 ${Math.round(info.peak)}%`;
 }
 
-// ================= RENDER DOMESTIC / OVERSEAS IPv4 =================
+// ================= RENDER DOMESTIC / OVERSEAS IPv4 + PURITY / FRAUD + PRIVACY MASK =================
+function maskIpForDisplay(ip) {
+  if (!ip) return '';
+  if (!state.settings.maskPublicIp) return ip;
+  const parts = String(ip).trim().split('.');
+  if (parts.length === 4) {
+    return `${parts[0]}.•••.•••.${parts[3]}`;
+  }
+  if (ip.length > 6) {
+    return `${ip.slice(0, 3)}•••${ip.slice(-3)}`;
+  }
+  return '•••.•••';
+}
+
+function buildIpRiskTooltip(ep) {
+  const lines = [];
+  if (ep.purityScore != null || ep.riskLabel) {
+    lines.push(`纯净度：${ep.purityScore != null ? `${ep.purityScore} / 100` : '—'}${ep.riskLabel ? `（${ep.riskLabel}）` : ''}`);
+  }
+  if (ep.fraudScore != null) {
+    lines.push(`欺诈风险分：${ep.fraudScore} / 100（越低越纯净）`);
+  }
+  if (ep.ipType) {
+    const flags = [];
+    if (ep.isResidential === true) flags.push('住宅');
+    else if (ep.isResidential === false) flags.push('非住宅');
+    if (ep.isBroadcast === true) flags.push('广播IP');
+    lines.push(`IP 类型：${ep.ipType}${flags.length > 0 ? `（${flags.join(' · ')}）` : ''}`);
+  }
+  const netOrg = [ep.asn, ep.isp].filter(Boolean).join(' · ');
+  if (netOrg) lines.push(`ASN / 运营商：${netOrg}`);
+  if (ep.location) lines.push(`归属地：${ep.location}`);
+  const sources = [ep.source, ep.riskSource].filter((v, idx, arr) => v && arr.indexOf(v) === idx);
+  if (sources.length > 0) lines.push(`数据来源：${sources.join(' + ')}`);
+  return lines.join('\n');
+}
+
 function renderNetworkIp(info) {
   if (!info) return;
   const pill = document.getElementById('ip-status-pill');
-  pill.className = 'status-pill';
-  if (info.isChecking) {
-    pill.textContent = '检测中';
-    pill.classList.add('info');
-  } else {
-    pill.textContent = '仅 IPv4';
-    pill.classList.add('neutral');
+  if (pill) {
+    pill.className = 'status-pill';
+    if (info.isChecking) {
+      pill.textContent = '检测中';
+      pill.classList.add('info');
+    } else if (state.settings.maskPublicIp) {
+      pill.textContent = 'IP 已脱敏';
+      pill.classList.add('warning');
+    } else {
+      pill.textContent = 'IPv4';
+      pill.classList.add('neutral');
+    }
   }
 
   renderSingleIp(
@@ -857,6 +1385,7 @@ function renderNetworkIp(info) {
     info.isChecking,
     document.getElementById('ip-domestic'),
     document.getElementById('ip-domestic-loc'),
+    document.getElementById('ip-domestic-risk'),
     document.getElementById('strip-ip-cn')
   );
 
@@ -865,17 +1394,57 @@ function renderNetworkIp(info) {
     info.isChecking,
     document.getElementById('ip-overseas'),
     document.getElementById('ip-overseas-loc'),
+    document.getElementById('ip-overseas-risk'),
     document.getElementById('strip-ip-intl')
   );
 }
 
-function renderSingleIp(ep, isChecking, addrEl, locEl, stripEl) {
+function renderSingleIp(ep, isChecking, addrEl, locEl, riskEl, stripEl) {
+  if (!addrEl || !locEl) return;
   addrEl.classList.remove('ip-err');
+
   if (ep && ep.ok && ep.ip) {
-    addrEl.textContent = ep.ip;
-    addrEl.title = ep.source ? `IPv4 来源：${ep.source}` : 'IPv4 地址';
+    const shownIp = maskIpForDisplay(ep.ip);
+    const tip = buildIpRiskTooltip(ep);
+    addrEl.textContent = shownIp;
+    addrEl.title = tip || (ep.source ? `IPv4 来源：${ep.source}` : 'IPv4 地址');
     locEl.textContent = ep.location || '—';
-    if (stripEl) stripEl.textContent = ep.ip;
+    locEl.title = ep.location || '';
+    if (stripEl) stripEl.textContent = shownIp;
+
+    if (riskEl) {
+      const hasRisk = ep.purityScore != null || ep.fraudScore != null || !!ep.ipType;
+      if (hasRisk) {
+        const htmlSegs = [];
+        if (ep.purityScore != null) {
+          htmlSegs.push(`<span>纯净 ${escapeHtml(String(ep.purityScore))}</span>`);
+        }
+        if (ep.fraudScore != null) {
+          if (ep.purityScore != null) {
+            htmlSegs.push(`<span class="ip-risk-fraud"> · 欺诈 ${escapeHtml(String(ep.fraudScore))}</span>`);
+          } else {
+            htmlSegs.push(`<span>欺诈 ${escapeHtml(String(ep.fraudScore))}</span>`);
+          }
+        }
+        if (ep.ipType) {
+          const prefix = (ep.purityScore != null || ep.fraudScore != null) ? ' · ' : '';
+          htmlSegs.push(`<span>${prefix}${escapeHtml(String(ep.ipType))}</span>`);
+        }
+        riskEl.innerHTML = htmlSegs.join('');
+
+        const lvl = String(ep.riskLevel || '').toLowerCase();
+        const riskCls = lvl === 'pure' ? 'risk-pure'
+          : (lvl === 'low' ? 'risk-low'
+          : (lvl === 'medium' ? 'risk-medium'
+          : (lvl === 'high' ? 'risk-high' : 'risk-neutral')));
+        riskEl.className = `ip-risk-pill mono ${riskCls}`;
+        riskEl.title = tip;
+      } else {
+        riskEl.className = 'ip-risk-pill mono hidden';
+        riskEl.textContent = '';
+        riskEl.title = '';
+      }
+    }
   } else if (isChecking) {
     if (!addrEl.textContent || addrEl.textContent === '—' || addrEl.textContent === '未连通') {
       addrEl.textContent = '检测中';
@@ -884,13 +1453,19 @@ function renderSingleIp(ep, isChecking, addrEl, locEl, stripEl) {
   } else {
     addrEl.textContent = '未连通';
     addrEl.classList.add('ip-err');
+    addrEl.title = '当前出口未连通';
     locEl.textContent = '—';
+    if (riskEl) {
+      riskEl.className = 'ip-risk-pill mono hidden';
+      riskEl.textContent = '';
+    }
     if (stripEl) stripEl.textContent = '—';
   }
 }
 
 function renderDrives(drives) {
   const container = document.getElementById('drive-list');
+  if (!container) return;
   if (!drives || drives.length === 0) {
     container.innerHTML = '<div class="label-muted">—</div>';
     return;
@@ -898,11 +1473,17 @@ function renderDrives(drives) {
   container.innerHTML = drives.map((d) => {
     const pct = Math.min(100, Math.round(d.usagePercent || 0));
     const cls = pct >= 90 ? 'danger' : (pct >= 80 ? 'warn' : '');
+    const tempChip = d.temperatureC != null
+      ? `<span class="drive-temp-chip mono ${d.temperatureC >= 60 ? 'val-danger' : (d.temperatureC >= 50 ? 'val-warn' : '')}">${Math.round(d.temperatureC)}°C</span>`
+      : '';
     return `
       <div class="drive-item">
         <div class="drive-top">
-          <span class="drive-name">${escapeHtml(d.name)} <span class="label-muted">${escapeHtml(d.label)}</span></span>
-          <span class="mono label-muted">可用 ${d.freeGb} GB / ${d.totalGb} GB (${pct}%)</span>
+          <span class="drive-name-wrap">
+            <span class="drive-name">${escapeHtml(d.name)} <span class="label-muted">${escapeHtml(d.label)}</span></span>
+            ${tempChip}
+          </span>
+          <span class="mono label-muted">可用 ${d.freeGb} / ${d.totalGb} GB (${pct}%)</span>
         </div>
         <div class="progress-track">
           <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
@@ -913,6 +1494,7 @@ function renderDrives(drives) {
 
 function renderProcesses(procs) {
   const container = document.getElementById('proc-list');
+  if (!container) return;
   if (!procs || procs.length === 0) {
     container.innerHTML = '<div class="proc-row"><span>—</span><span class="align-right mono">—</span><span class="align-right mono">—</span><span class="align-right mono">—</span></div>';
     return;
@@ -923,18 +1505,580 @@ function renderProcesses(procs) {
       ? (b.memoryMb - a.memoryMb)
       : (b.cpuPercent - a.cpuPercent || b.memoryMb - a.memoryMb)
   );
-  container.innerHTML = sorted.slice(0, 5).map((p) => `
-    <div class="proc-row" role="row">
-      <span class="proc-name" role="cell" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+  container.innerHTML = sorted.slice(0, 8).map((p) => `
+    <div class="proc-row" role="row" data-pid="${p.pid}" title="${state.isDirectExclusive ? escapeHtml(p.name) : `点击在进程与线程树中查看 ${escapeHtml(p.name)} (PID ${p.pid})`}">
+      <span class="proc-name" role="cell">${escapeHtml(p.name)}</span>
       <span class="align-right mono label-muted" role="cell">${p.pid}</span>
       <span class="align-right mono" role="cell">${p.cpuPercent.toFixed(1)}%</span>
-      <span class="align-right mono" role="cell">${p.memoryMb >= 1024 ? (p.memoryMb / 1024).toFixed(1) + ' GB' : Math.round(p.memoryMb) + ' MB'}</span>
+      <span class="align-right mono" role="cell">${formatMemMb(p.memoryMb)}</span>
     </div>`).join('');
 }
 
-// ================= RENDER MARKET & K-LINE =================
+// ================= PAGE 2: PROCESS HACKER PROCESS & LIVE THREAD TREE =================
+const SORT_LABELS = {
+  cpu: 'CPU',
+  mem: '内存',
+  io: 'I/O',
+  threads: '线程',
+  handles: '句柄',
+  pid: 'PID',
+  name: '名称'
+};
+
+const CAT_LABELS = {
+  system: '系统核心',
+  service: '系统服务',
+  elevated: '管理员提权',
+  self: '自身进程',
+  normal: '普通进程'
+};
+
+function syncProcessTreeControlsFromSettings() {
+  const s = state.settings;
+  const viewMode = s.processTreeViewMode === 'flat' ? 'flat' : 'tree';
+  const sortBy = String(s.processTreeSortBy || 'cpu').toLowerCase();
+  const autoFollow = s.processTreeAutoFollowTop !== false;
+  const filter = s.processTreeFilter || '';
+
+  document.getElementById('pt-view-tree')?.classList.toggle('active', viewMode === 'tree');
+  document.getElementById('pt-view-flat')?.classList.toggle('active', viewMode === 'flat');
+  document.getElementById('pt-tree-fold-group')?.classList.toggle('hidden', viewMode !== 'tree');
+
+  document.querySelectorAll('#pt-sort-group .pt-chip').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.sort === sortBy);
+  });
+
+  const autoBtn = document.getElementById('pt-autofollow-btn');
+  if (autoBtn) autoBtn.classList.toggle('active', autoFollow);
+
+  const filterInput = document.getElementById('pt-filter-input');
+  const clearBtn = document.getElementById('pt-filter-clear');
+  if (filterInput && document.activeElement !== filterInput && filterInput.value !== filter) {
+    filterInput.value = filter;
+  }
+  if (clearBtn) clearBtn.classList.toggle('hidden', !(filterInput ? filterInput.value : filter));
+}
+
+function renderProcessTree(snap) {
+  if (!snap) return;
+
+  // Summary strip
+  const procsEl = document.getElementById('pt-stat-procs');
+  const thrEl = document.getElementById('pt-stat-threads');
+  const hdlEl = document.getElementById('pt-stat-handles');
+  if (procsEl) procsEl.textContent = (snap.totalProcesses || 0).toLocaleString('en-US');
+  if (thrEl) thrEl.textContent = (snap.totalThreads || 0).toLocaleString('en-US');
+  if (hdlEl) hdlEl.textContent = (snap.totalHandles || 0).toLocaleString('en-US');
+
+  // Direct Display Exclusive read-only status pills
+  const dMode = document.getElementById('pt-direct-mode-pill');
+  const dFollow = document.getElementById('pt-direct-follow-pill');
+  const dFilter = document.getElementById('pt-direct-filter-pill');
+  if (dMode) {
+    const viewLbl = snap.viewMode === 'flat' ? '扁平排行' : '树状层级';
+    const sortLbl = SORT_LABELS[snap.sortBy] || 'CPU';
+    dMode.textContent = `${viewLbl} · 按 ${sortLbl}`;
+  }
+  if (dFollow) {
+    if (snap.autoFollowTop) {
+      dFollow.textContent = '硬件独占 · 自动追踪 Top CPU';
+      dFollow.className = 'status-pill info';
+    } else if (snap.pinnedTargetActive && snap.activePid > 0) {
+      const selName = snap.selectedProcess?.name ? `${snap.selectedProcess.name} ` : '';
+      dFollow.textContent = `锁定目标 · ${selName}(PID ${snap.activePid})`;
+      dFollow.className = 'status-pill success';
+    } else if (!snap.autoFollowTop && snap.pinnedPid > 0 && snap.activePid > 0) {
+      const selName = snap.selectedProcess?.name ? `${snap.selectedProcess.name} ` : '';
+      dFollow.textContent = `原锁定已退出 · 回退 ${selName}(PID ${snap.activePid})`;
+      dFollow.className = 'status-pill warning';
+    } else if (snap.activePid > 0) {
+      const selName = snap.selectedProcess?.name ? `${snap.selectedProcess.name} ` : '';
+      dFollow.textContent = `硬件独占 · ${selName}(PID ${snap.activePid})`;
+      dFollow.className = 'status-pill info';
+    } else {
+      dFollow.textContent = '硬件独占 · 实时监控';
+      dFollow.className = 'status-pill neutral';
+    }
+  }
+  if (dFilter) {
+    if (snap.filter) {
+      dFilter.textContent = `筛选: ${snap.filter}`;
+      dFilter.classList.remove('hidden');
+    } else {
+      dFilter.classList.add('hidden');
+    }
+  }
+
+  // Sync active toggle buttons with live snapshot
+  document.getElementById('pt-view-tree')?.classList.toggle('active', snap.viewMode !== 'flat');
+  document.getElementById('pt-view-flat')?.classList.toggle('active', snap.viewMode === 'flat');
+  document.getElementById('pt-tree-fold-group')?.classList.toggle('hidden', snap.viewMode === 'flat');
+  document.querySelectorAll('#pt-sort-group .pt-chip').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.sort === snap.sortBy);
+  });
+  document.getElementById('pt-autofollow-btn')?.classList.toggle('active', !!snap.autoFollowTop);
+
+  // Filter collapsed children in interactive Tree mode (never hide children in Direct Exclusive or when searching)
+  const list = Array.isArray(snap.processes) ? snap.processes : [];
+  const allowCollapse = snap.viewMode !== 'flat' && !state.isDirectExclusive && !snap.filter;
+  const visibleNodes = [];
+  let hiddenUnderDepth = -1;
+
+  for (let i = 0; i < list.length; i++) {
+    const node = list[i];
+    if (allowCollapse && hiddenUnderDepth >= 0) {
+      if (node.depth > hiddenUnderDepth) continue;
+      hiddenUnderDepth = -1;
+    }
+    visibleNodes.push(node);
+    if (allowCollapse && node.hasChildren && state.collapsedPids.has(node.pid)) {
+      hiddenUnderDepth = node.depth;
+    }
+  }
+
+  const shownCountEl = document.getElementById('pt-shown-count');
+  if (shownCountEl) shownCountEl.textContent = `${visibleNodes.length} 项`;
+
+  const tbody = document.getElementById('pt-process-list');
+  if (tbody) {
+    const prevScroll = tbody.scrollTop;
+    if (visibleNodes.length === 0) {
+      tbody.innerHTML = `<div class="pt-empty-state">${snap.filter ? '没有匹配筛选条件的进程' : '暂无进程数据'}</div>`;
+    } else {
+      const htmlParts = new Array(visibleNodes.length);
+      for (let i = 0; i < visibleNodes.length; i++) {
+        const p = visibleNodes[i];
+        const isActive = p.pid === snap.activePid;
+        const catCls = `cat-${p.category || 'normal'}`;
+        const lifeCls = `life-${p.lifecycle || 'normal'}`;
+        const collapsed = state.collapsedPids.has(p.pid);
+
+        const guidesHtml = snap.viewMode !== 'flat' && p.treeGuides
+          ? `<span class="pt-guides mono">${escapeHtml(p.treeGuides)}</span>`
+          : '';
+        const toggleHtml = allowCollapse && p.hasChildren
+          ? `<button type="button" class="pt-toggle-btn" data-toggle-pid="${p.pid}" title="${collapsed ? '展开子进程' : '折叠子进程'}">${collapsed ? '▸' : '▾'}</button>`
+          : '';
+        const lifeTag = p.lifecycle === 'new'
+          ? '<span class="pt-life-tag new">新</span>'
+          : (p.lifecycle === 'exited' ? '<span class="pt-life-tag exited">退出</span>' : '');
+
+        const cpuPct = Math.max(0, Number(p.cpuPercent) || 0);
+        const cpuBarW = Math.min(100, cpuPct);
+        const cpuBarCls = cpuPct >= 75 ? 'danger' : (cpuPct >= 35 ? 'warn' : '');
+        const ioTotal = (p.ioReadBytesPerSec || 0) + (p.ioWriteBytesPerSec || 0);
+        const titleStr = p.imagePath ? `${p.name}\n${p.imagePath}` : p.name;
+
+        htmlParts[i] = `
+          <div class="pt-row ${catCls} ${lifeCls}${isActive ? ' active' : ''}" role="row" data-pid="${p.pid}" title="${escapeHtml(titleStr)}">
+            <div class="pt-name-cell">${guidesHtml}${toggleHtml}<span class="pt-proc-name">${escapeHtml(p.name)}</span>${lifeTag}</div>
+            <span class="align-right mono label-muted">${p.pid}</span>
+            <div class="pt-cpu-cell mono">
+              ${cpuBarW > 0.2 ? `<span class="pt-cpu-bar ${cpuBarCls}" style="width:${cpuBarW.toFixed(1)}%"></span>` : ''}
+              <span class="pt-cpu-text ${cpuPct >= 75 ? 'val-danger' : (cpuPct >= 35 ? 'val-warn' : '')}">${cpuPct.toFixed(1)}%</span>
+            </div>
+            <span class="align-right mono">${formatMemMb(p.workingSetMb || 0)}</span>
+            <span class="align-right mono label-muted pt-col-io">${ioTotal > 0 ? formatSpeedCompact(ioTotal) : '—'}</span>
+            <span class="align-right mono pt-col-thr">${p.threadCount || 0}</span>
+            <span class="align-right mono label-muted pt-col-hdl">${p.handleCount || 0}</span>
+            <span class="align-right label-muted pt-col-pri">${escapeHtml(p.priority || '—')}</span>
+          </div>`;
+      }
+      tbody.innerHTML = htmlParts.join('');
+    }
+    tbody.scrollTop = prevScroll;
+
+    const nextActivePid = Number(snap.activePid) || 0;
+    if (nextActivePid > 0 && nextActivePid !== state.lastRenderedActivePid) {
+      if (tbody.offsetParent !== null) {
+        const activeRow = tbody.querySelector('.pt-row.active');
+        if (activeRow) {
+          activeRow.scrollIntoView({ block: 'nearest' });
+          state.lastRenderedActivePid = nextActivePid;
+        }
+      }
+    } else if (nextActivePid === 0) {
+      state.lastRenderedActivePid = 0;
+    }
+  }
+
+  renderProcessDetail(snap.selectedProcess, snap);
+}
+
+function renderProcessDetail(detail, snap) {
+  const nameEl = document.getElementById('pt-det-name');
+  const pidEl = document.getElementById('pt-det-pid');
+  const catEl = document.getElementById('pt-det-cat');
+  const priEl = document.getElementById('pt-det-pri');
+  const pinEl = document.getElementById('pt-det-pin-badge');
+  const pathEl = document.getElementById('pt-det-path');
+  const deniedEl = document.getElementById('pt-det-denied-pill');
+  const parentEl = document.getElementById('pt-det-parent');
+  const uptimeEl = document.getElementById('pt-det-uptime');
+  const memEl = document.getElementById('pt-det-mem');
+  const ioEl = document.getElementById('pt-det-io');
+  const openBtn = document.getElementById('pt-act-open-loc');
+  const copyBtn = document.getElementById('pt-act-copy-path');
+  const termBtn = document.getElementById('pt-act-terminate');
+  const thrCountEl = document.getElementById('pt-thread-count-pill');
+  const thrListEl = document.getElementById('pt-thread-list');
+
+  if (!detail) {
+    if (nameEl) nameEl.textContent = '暂无选中进程';
+    if (pidEl) pidEl.textContent = 'PID —';
+    catEl?.classList.add('hidden');
+    priEl?.classList.add('hidden');
+    pinEl?.classList.add('hidden');
+    deniedEl?.classList.add('hidden');
+    if (pathEl) { pathEl.textContent = '—'; pathEl.title = ''; }
+    if (parentEl) parentEl.textContent = '—';
+    if (uptimeEl) uptimeEl.textContent = '—';
+    if (memEl) memEl.textContent = '—';
+    if (ioEl) ioEl.textContent = '—';
+    if (openBtn) openBtn.disabled = true;
+    if (copyBtn) copyBtn.disabled = true;
+    if (termBtn) { termBtn.disabled = true; termBtn.classList.remove('confirming'); termBtn.textContent = '结束进程'; }
+    if (thrCountEl) thrCountEl.textContent = '0 线程';
+    if (thrListEl) thrListEl.innerHTML = '<div class="pt-empty-state">点击左侧任意进程或开启自动追踪以查看实时线程树</div>';
+    return;
+  }
+
+  // Cancel pending terminate confirm if inspected PID changed
+  if (state.pendingTerminatePid && state.pendingTerminatePid !== detail.pid) {
+    resetPendingTerminate();
+  }
+
+  if (nameEl) { nameEl.textContent = detail.name || `PID ${detail.pid}`; nameEl.title = detail.name || ''; }
+  if (pidEl) pidEl.textContent = `PID ${detail.pid}`;
+
+  if (catEl) {
+    const cat = detail.category || 'normal';
+    catEl.textContent = CAT_LABELS[cat] || '普通进程';
+    catEl.className = `status-pill ${cat === 'elevated' ? 'warning' : (cat === 'self' ? 'info' : (cat === 'service' ? 'success' : 'neutral'))}`;
+  }
+  if (priEl) {
+    if (detail.priority) {
+      priEl.textContent = `优先级 ${detail.priority}`;
+      priEl.classList.remove('hidden');
+    } else {
+      priEl.classList.add('hidden');
+    }
+  }
+  if (pinEl) {
+    pinEl.classList.remove('hidden');
+    if (snap?.autoFollowTop) {
+      pinEl.textContent = '自动追踪 Top';
+      pinEl.className = 'status-pill info';
+    } else if (snap?.pinnedTargetActive) {
+      pinEl.textContent = '已锁定观察';
+      pinEl.className = 'status-pill success';
+    } else if (snap?.pinnedPid > 0) {
+      pinEl.textContent = `原目标 PID ${snap.pinnedPid} 已退出 · 回退 Top`;
+      pinEl.className = 'status-pill warning';
+    } else {
+      pinEl.textContent = '自动追踪 Top';
+      pinEl.className = 'status-pill info';
+    }
+  }
+
+  if (pathEl) {
+    pathEl.textContent = detail.imagePath || '（内核/受保护进程，无可见磁盘路径）';
+    pathEl.title = detail.imagePath || '';
+  }
+  deniedEl?.classList.toggle('hidden', !detail.accessDenied);
+
+  if (parentEl) {
+    parentEl.textContent = detail.parentPid > 0
+      ? `${detail.parentName || '—'} (${detail.parentPid})`
+      : '无父进程';
+  }
+  if (uptimeEl) {
+    const startPart = detail.startTimeText || '—';
+    const upPart = detail.uptimeSeconds > 0 ? ` · ${formatUptimeCompact(detail.uptimeSeconds)}` : '';
+    uptimeEl.textContent = `${startPart}${upPart}`;
+  }
+  if (memEl) {
+    memEl.textContent = `${formatMemMb(detail.workingSetMb || 0)} / ${formatMemMb(detail.privateMb || 0)}`;
+  }
+  if (ioEl) {
+    ioEl.textContent = `读 ${formatMb(detail.totalIoReadMb || 0)} / 写 ${formatMb(detail.totalIoWriteMb || 0)}`;
+  }
+
+  if (openBtn) openBtn.disabled = detail.pid <= 4 || !detail.imagePath;
+  if (copyBtn) copyBtn.disabled = !detail.imagePath;
+  if (termBtn) {
+    termBtn.disabled = !detail.canTerminate;
+    if (state.pendingTerminatePid === detail.pid) {
+      termBtn.classList.add('confirming');
+      termBtn.textContent = `确认结束 PID ${detail.pid}?`;
+    } else {
+      termBtn.classList.remove('confirming');
+      termBtn.textContent = detail.canTerminate ? '结束进程' : '受保护';
+    }
+  }
+
+  const threads = Array.isArray(detail.threads) ? detail.threads : [];
+  if (thrCountEl) {
+    const totalT = detail.threadCount || threads.length;
+    thrCountEl.textContent = threads.length < totalT
+      ? `显示 ${threads.length} / ${totalT} 线程`
+      : `${totalT} 线程`;
+  }
+
+  if (thrListEl) {
+    const prevScroll = thrListEl.scrollTop;
+    if (threads.length === 0) {
+      thrListEl.innerHTML = `<div class="pt-empty-state">${detail.accessDenied ? '系统受保护进程，请以管理员身份运行查看线程明细' : '暂无线程明细'}</div>`;
+    } else {
+      thrListEl.innerHTML = threads.map((th) => {
+        const totalCpu = Math.max(0, Number(th.cpuPercent) || 0);
+        const userCpu = Math.max(0, Number(th.userCpuPercent) || 0);
+        const kernelCpu = Math.max(0, Number(th.kernelCpuPercent) || 0);
+        // Scale dual-tone bar to 0..100% (amplify lightly so even 2-10% active threads are visually distinct)
+        const uW = Math.min(100, userCpu);
+        const kW = Math.min(100 - uW, kernelCpu);
+        const addrHtml = formatStartAddressHtml(th.startAddress || '—');
+        const st = String(th.state || 'Wait');
+        const stCls = st === 'Running' ? 'st-running' : (st === 'Active' ? 'st-active' : 'st-wait');
+        const stLabel = st === 'Running' ? '运行' : (st === 'Active' ? '活跃' : '等待');
+
+        return `
+          <div class="pt-thread-row" role="row">
+            <span class="mono label-muted">${th.tid}</span>
+            <div class="pt-tcpu-cell mono" title="总计 ${totalCpu.toFixed(1)}% · 用户态 ${userCpu.toFixed(1)}% · 内核态 ${kernelCpu.toFixed(1)}%">
+              <span class="pt-tbar-track">
+                ${uW > 0 ? `<span class="pt-tbar-user" style="width:${uW.toFixed(1)}%"></span>` : ''}
+                ${kW > 0 ? `<span class="pt-tbar-kernel" style="width:${kW.toFixed(1)}%"></span>` : ''}
+              </span>
+              <span class="${totalCpu >= 20 ? 'val-warn' : ''}">${totalCpu.toFixed(1)}%</span>
+            </div>
+            <span class="pt-start-addr mono" title="${escapeHtml(th.startAddress || '—')}">${addrHtml}</span>
+            <span class="align-right mono label-muted pt-tcol-pri" title="基础 ${th.basePriority} / 动态 ${th.dynamicPriority}">${escapeHtml(th.priorityLabel || String(th.dynamicPriority ?? '—'))}</span>
+            <span class="align-right mono label-muted pt-tcol-tot">${formatCpuSeconds(th.totalCpuSeconds || 0)}</span>
+            <span class="pt-state-pill ${stCls}">${stLabel}</span>
+          </div>`;
+      }).join('');
+    }
+    thrListEl.scrollTop = prevScroll;
+  }
+}
+
+function formatStartAddressHtml(addr) {
+  const s = String(addr || '—');
+  const plusIdx = s.indexOf('+');
+  if (plusIdx > 0) {
+    return `<span class="pt-addr-mod">${escapeHtml(s.slice(0, plusIdx))}</span>${escapeHtml(s.slice(plusIdx))}`;
+  }
+  return escapeHtml(s);
+}
+
+function showProcessToast(message, isOk = true) {
+  const el = document.getElementById('pt-action-toast');
+  if (!el) return;
+  if (state.toastTimer) clearTimeout(state.toastTimer);
+  el.textContent = message;
+  el.className = `pt-action-toast ${isOk ? 'ok' : 'err'}`;
+  state.toastTimer = setTimeout(() => {
+    el.classList.add('hidden');
+  }, 3600);
+}
+
+function handleProcessActionResult(res) {
+  if (!res) return;
+  resetPendingTerminate();
+  showProcessToast(res.message || (res.success ? '操作成功' : '操作失败'), !!res.success);
+}
+
+function resetPendingTerminate() {
+  state.pendingTerminatePid = 0;
+  if (state.pendingTerminateTimer) {
+    clearTimeout(state.pendingTerminateTimer);
+    state.pendingTerminateTimer = null;
+  }
+  const btn = document.getElementById('pt-act-terminate');
+  if (btn) {
+    btn.classList.remove('confirming');
+    const detail = state.lastProcessTree?.selectedProcess;
+    btn.textContent = detail && !detail.canTerminate ? '受保护' : '结束进程';
+  }
+}
+
+// ================= INTERACTIVE UI EVENT BINDINGS =================
+// 1. Topbar Page Switcher
+document.querySelectorAll('#page-switcher .page-tab').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (state.isDirectExclusive) return;
+    const page = btn.dataset.page === 'proctree' ? 'proctree' : 'overview';
+    state.settings.monitorPage = page;
+    applyVisualSettings();
+    postHost('setMonitorPage', { page });
+  });
+});
+
+// 2. Non-Admin CPU Temp Elevation Button
+document.getElementById('cpu-elevate-btn')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  postHost('restartAsAdmin');
+});
+
+// 3. Overview Top Processes row click -> jump to Process Tree pinned on that PID (Desktop mode)
+document.getElementById('proc-list')?.addEventListener('click', (e) => {
+  if (state.isDirectExclusive) return;
+  const row = e.target.closest('.proc-row[data-pid]');
+  if (!row) return;
+  const pid = parseInt(row.dataset.pid, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+  postHost('setProcessTreeOptions', { pinnedPid: pid, autoFollowTop: false });
+  postHost('setMonitorPage', { page: 'proctree' });
+});
+
+// 4. Process Tree Toolbar Controls (Desktop mode)
+document.getElementById('pt-view-tree')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  postHost('setProcessTreeOptions', { viewMode: 'tree' });
+});
+
+document.getElementById('pt-view-flat')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  postHost('setProcessTreeOptions', { viewMode: 'flat' });
+});
+
+document.querySelectorAll('#pt-sort-group .pt-chip').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (state.isDirectExclusive) return;
+    const sortBy = btn.dataset.sort;
+    if (sortBy) postHost('setProcessTreeOptions', { sortBy });
+  });
+});
+
+document.getElementById('pt-autofollow-btn')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  const next = !(state.lastProcessTree ? state.lastProcessTree.autoFollowTop : state.settings.processTreeAutoFollowTop);
+  const pinnedPid = next ? 0 : (state.lastProcessTree?.activePid || 0);
+  postHost('setProcessTreeOptions', { autoFollowTop: next, pinnedPid });
+});
+
+document.getElementById('pt-expand-all')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  state.collapsedPids.clear();
+  if (state.lastProcessTree) renderProcessTree(state.lastProcessTree);
+});
+
+document.getElementById('pt-collapse-all')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  const list = state.lastProcessTree?.processes;
+  if (Array.isArray(list)) {
+    for (const p of list) {
+      if (p.hasChildren) state.collapsedPids.add(p.pid);
+    }
+    renderProcessTree(state.lastProcessTree);
+  }
+});
+
+// Filter input with debounce
+const ptFilterInput = document.getElementById('pt-filter-input');
+const ptFilterClear = document.getElementById('pt-filter-clear');
+ptFilterInput?.addEventListener('input', () => {
+  const val = ptFilterInput.value.trim();
+  ptFilterClear?.classList.toggle('hidden', !ptFilterInput.value);
+  if (state.filterDebounceTimer) clearTimeout(state.filterDebounceTimer);
+  state.filterDebounceTimer = setTimeout(() => {
+    postHost('setProcessTreeOptions', { filter: val });
+  }, 180);
+});
+
+ptFilterClear?.addEventListener('click', () => {
+  if (!ptFilterInput) return;
+  ptFilterInput.value = '';
+  ptFilterClear.classList.add('hidden');
+  if (state.filterDebounceTimer) clearTimeout(state.filterDebounceTimer);
+  postHost('setProcessTreeOptions', { filter: '' });
+  ptFilterInput.focus();
+});
+
+// 5. Event Delegation for Process Tree rows & expand/collapse toggles
+document.getElementById('pt-process-list')?.addEventListener('click', (e) => {
+  if (state.isDirectExclusive) return;
+
+  const toggleBtn = e.target.closest('.pt-toggle-btn[data-toggle-pid]');
+  if (toggleBtn) {
+    e.stopPropagation();
+    const pid = parseInt(toggleBtn.dataset.togglePid, 10);
+    if (Number.isFinite(pid)) {
+      if (state.collapsedPids.has(pid)) state.collapsedPids.delete(pid);
+      else state.collapsedPids.add(pid);
+      if (state.lastProcessTree) renderProcessTree(state.lastProcessTree);
+    }
+    return;
+  }
+
+  const row = e.target.closest('.pt-row[data-pid]');
+  if (!row) return;
+  const pid = parseInt(row.dataset.pid, 10);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+
+  resetPendingTerminate();
+  document.querySelectorAll('#pt-process-list .pt-row.active').forEach((el) => el.classList.remove('active'));
+  row.classList.add('active');
+  postHost('setProcessTreeOptions', { pinnedPid: pid, autoFollowTop: false });
+});
+
+// 6. Detail Inspector Actions (Open Location / Copy Path / Two-Step Safe Terminate)
+document.getElementById('pt-act-open-loc')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  const pid = state.lastProcessTree?.selectedProcess?.pid;
+  if (pid > 0) postHost('openProcessLocation', { pid });
+});
+
+document.getElementById('pt-act-copy-path')?.addEventListener('click', async () => {
+  if (state.isDirectExclusive) return;
+  const path = state.lastProcessTree?.selectedProcess?.imagePath;
+  if (!path) return;
+  try {
+    await navigator.clipboard.writeText(path);
+    showProcessToast('已复制进程可执行文件路径', true);
+  } catch {
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = path;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      showProcessToast('已复制进程可执行文件路径', true);
+    } catch {
+      showProcessToast('复制路径失败', false);
+    }
+  }
+});
+
+document.getElementById('pt-act-terminate')?.addEventListener('click', () => {
+  if (state.isDirectExclusive) return;
+  const detail = state.lastProcessTree?.selectedProcess;
+  if (!detail || !detail.canTerminate) return;
+
+  if (state.pendingTerminatePid === detail.pid) {
+    const targetPid = detail.pid;
+    resetPendingTerminate();
+    postHost('terminateProcess', { pid: targetPid });
+    return;
+  }
+
+  resetPendingTerminate();
+  state.pendingTerminatePid = detail.pid;
+  const btn = document.getElementById('pt-act-terminate');
+  if (btn) {
+    btn.classList.add('confirming');
+    btn.textContent = `确认结束 PID ${detail.pid}?`;
+  }
+  state.pendingTerminateTimer = setTimeout(resetPendingTerminate, 3500);
+});
+
+// ================= RENDER MARKET & K-LINE (Preserved intact when MarketEnabled) =================
 function handleQuotes(quotes) {
-  if (!Array.isArray(quotes)) return;
+  if (!marketEnabled() || !Array.isArray(quotes)) return;
   for (const q of quotes) {
     state.quotes.set(q.id, q);
     if (q.price > 0) {
@@ -969,7 +2113,7 @@ function handleQuotes(quotes) {
 }
 
 function handleKline(payload) {
-  if (!payload) return;
+  if (!marketEnabled() || !payload) return;
   const resetView = !state.lastKline
     || state.lastKline.symbolId !== payload.symbolId
     || state.lastKline.interval !== payload.interval;
@@ -1098,7 +2242,6 @@ function renderCompactMarketStrip() {
   }).join('');
 }
 
-// ================= READ-ONLY FX CONVERSION DISPLAY =================
 function updateFxReadout() {
   const s = state.settings;
   const amount = Number(s.fxAmount ?? 100);
@@ -1109,6 +2252,7 @@ function updateFxReadout() {
   const rTo = state.fxRates[to];
   const exprEl = document.getElementById('fx-expression');
   const rateEl = document.getElementById('fx-unit-rate');
+  if (!exprEl || !rateEl) return;
 
   if (!isFinite(amount) || !rFrom || !rTo) {
     exprEl.textContent = `${amount} ${from} = — ${to}`;
@@ -1125,7 +2269,7 @@ function updateFxReadout() {
   rateEl.textContent = `1 ${from} = ${unitRate.toFixed(4)} ${to}`;
 }
 
-// ================= WINDOW DRAG (ONLY WHEN UNLOCKED IN SETTINGS) & SHORTCUTS =================
+// ================= WINDOW DRAG (ONLY WHEN UNLOCKED) & KEYBOARD SHORTCUTS =================
 document.querySelectorAll('[data-drag="true"]').forEach((el) => {
   el.addEventListener('mousedown', (e) => {
     if (e.button === 0 && e.detail === 1 && !state.isFullScreen && !state.lockWindowPosition) {
@@ -1135,17 +2279,36 @@ document.querySelectorAll('[data-drag="true"]').forEach((el) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  const inInput = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
+
   if (e.key === 'F11') {
     e.preventDefault();
     postHost('toggleFullScreen');
   } else if (e.key === 'Escape') {
+    if (inInput && document.activeElement === ptFilterInput) {
+      ptFilterInput.blur();
+      return;
+    }
+    if (state.pendingTerminatePid) {
+      resetPendingTerminate();
+      return;
+    }
     if (state.isFullScreen) {
       postHost('setFullScreen', { value: false });
     }
+  } else if (e.ctrlKey && e.key === 'Tab') {
+    e.preventDefault();
+    postHost('toggleMonitorPage');
+  } else if (e.altKey && (e.key === '1' || e.code === 'Digit1')) {
+    e.preventDefault();
+    postHost('setMonitorPage', { page: 'overview' });
+  } else if (e.altKey && (e.key === '2' || e.code === 'Digit2')) {
+    e.preventDefault();
+    postHost('setMonitorPage', { page: 'proctree' });
   } else if (e.ctrlKey && e.key === ',') {
     e.preventDefault();
     postHost('openControlWindow');
-  } else if (e.ctrlKey && e.key >= '1' && e.key <= '9') {
+  } else if (e.ctrlKey && !e.altKey && e.key >= '1' && e.key <= '9') {
     const idx = parseInt(e.key, 10) - 1;
     if (state.monitors[idx]) {
       e.preventDefault();
@@ -1168,6 +2331,19 @@ function formatSpeed(bytesPerSec) {
   return `${Math.round(bytesPerSec)} B/s`;
 }
 
+function formatSpeedCompact(bytesPerSec) {
+  if (bytesPerSec >= 1024 * 1024 * 1024) return `${(bytesPerSec / (1024 * 1024 * 1024)).toFixed(1)}G/s`;
+  if (bytesPerSec >= 1024 * 1024) return `${(bytesPerSec / (1024 * 1024)).toFixed(1)}M/s`;
+  if (bytesPerSec >= 1024) return `${(bytesPerSec / 1024).toFixed(0)}K/s`;
+  return `${Math.round(bytesPerSec)}B/s`;
+}
+
+function formatMemMb(mb) {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`;
+  if (mb >= 100) return `${Math.round(mb)} MB`;
+  return `${mb.toFixed(1)} MB`;
+}
+
 function formatMb(mb) {
   if (mb >= 1024) return `${(mb / 1024).toFixed(2)} G`;
   return `${Math.round(mb)} M`;
@@ -1181,6 +2357,36 @@ function formatUptime(sec) {
   if (d > 0) return `${d} 天 ${h} 小时`;
   if (h > 0) return `${h} 小时 ${m} 分`;
   return `${m} 分钟`;
+}
+
+function formatUptimeCompact(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
+function formatDurationMmSs(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rem = s % 60;
+  if (h > 0) {
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+  }
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
+
+function formatCpuSeconds(sec) {
+  const s = Math.max(0, Number(sec) || 0);
+  if (s >= 3600) return `${(s / 3600).toFixed(1)}h`;
+  if (s >= 60) return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+  if (s >= 10) return `${s.toFixed(0)}s`;
+  return `${s.toFixed(1)}s`;
 }
 
 function escapeHtml(str) {
